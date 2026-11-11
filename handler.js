@@ -17,29 +17,44 @@ export function pasangPenjawab(sock) {
       if (!text) continue;
 
       try {
-        // --- AREA UNTUK FITUR TAMBAHAN BOT ---
-        // Letakkan fitur barumu di sini. Jika perintah cocok, bot akan membalas
-        // dan langsung 'continue' agar tidak memicu aturan dari rules.js
         const command = text.toLowerCase();
 
-        if (command === '!status') {
-          await sock.sendMessage(jid, { text: '✅ Bot aktif. Sistem OTP 2 menit berjalan lancar.' }, { quoted: msg });
+        // --- TAMPILAN MENU YANG ELEGAN UNTUK PENGGUNA ---
+        if (command === '!menu' || command === '!help') {
+          const menuText = `╔════════════════════════╗
+║      🌟 *BOT TRADE PRO* 🌟     ║
+╚════════════════════════╝
+
+👋 Halo! Berikut adalah daftar perintah yang bisa digunakan:
+
+🔸 *!status* - Cek keadaan bot
+🔸 *!ping* - Uji kecepatan respon
+🔸 *!menu* - Menampilkan daftar ini
+
+_Bot ini dirancang untuk mempermudah pekerjaanmu._ ✨`;
+          
+          await sock.sendMessage(jid, { text: menuText }, { quoted: msg });
           continue; 
         }
 
-        if (command === '!ping') {
-          await sock.sendMessage(jid, { text: 'Pong! Bot aman.' }, { quoted: msg });
+        if (command === '!status') {
+          await sock.sendMessage(jid, { text: '✅ *Status:* Bot Aktif\n⏳ *Sistem:* OTP 2 Menit & Auto-Retry berjalan lancar.' }, { quoted: msg });
           continue;
         }
-        // -------------------------------------
 
-        // Jika bukan fitur tambahan di atas, gunakan rules.js bawaan aslinya (Aman & Tidak Rusak)
+        if (command === '!ping') {
+          await sock.sendMessage(jid, { text: '🏓 *Pong!* Sistem berjalan mulus.' }, { quoted: msg });
+          continue;
+        }
+        // ------------------------------------------------
+
+        // Balasan asli dari ayahmu tetap aman dan berfungsi
         const balasanAsli = getReply(text);
         if (balasanAsli) {
           await sock.sendMessage(jid, { text: balasanAsli }, { quoted: msg });
         }
       } catch (e) {
-        console.log('Gagal kirim balasan:', e?.message || e);
+        console.log('⚠️ Gagal kirim balasan:', e?.message || e);
       }
     }
   });
