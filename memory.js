@@ -1,38 +1,37 @@
-import fs from 'fs';
-import path from 'path';
+import fs from 'fs/promises';
+import existsSync from 'fs';
 
 const MEMORY_FILE = './memory.json';
 
-// Inisialisasi struktur database memori
 const defaultMemory = {
-  users: {},         // Data ingatan tiap pengguna { jid: { name, facts: [], lastSeen } }
-  learnedWords: [],  // Kata kotor/toxic yang dipelajari otomatis oleh AI
-  conversations: {}  // Riwayat percakapan singkat untuk konteks AI
+  users: {},
+  learnedWords: [],
+  conversations: {}
 };
 
-// Load memori dari file JSON
-export function loadMemory() {
+// Membaca memori saat startup
+export async function loadMemory() {
   try {
-    if (fs.existsSync(MEMORY_FILE)) {
-      const data = fs.readFileSync(MEMORY_FILE, 'utf-8');
+    if (existsSync.existsSync(MEMORY_FILE)) {
+      const data = await fs.readFile(MEMORY_FILE, 'utf-8');
       return JSON.parse(data);
     }
   } catch (err) {
-    console.error('⚠️ Gagal membaca memory.json, menggunakan memori baru:', err.message);
+    console.error('⚠️ Gagal membaca memory.json:', err.message);
   }
   return defaultMemory;
 }
 
-// Simpan perubahan memori ke file JSON
-export function saveMemory(data) {
+// Menyimpan memori secara asinkron (tidak menghentikan proses bot)
+export async function saveMemory(data) {
   try {
-    fs.writeFileSync(MEMORY_FILE, JSON.stringify(data, null, 2), 'utf-8');
+    await fs.writeFile(MEMORY_FILE, JSON.stringify(data, null, 2), 'utf-8');
   } catch (err) {
     console.error('⚠️ Gagal menyimpan memory.json:', err.message);
   }
 }
 
-// Tambahkan fakta baru tentang pengguna
+// Menambah fakta pengguna
 export function rememberFact(db, jid, name, fact) {
   if (!db.users[jid]) {
     db.users[jid] = { name, facts: [], lastSeen: new Date().toISOString() };
@@ -40,21 +39,18 @@ export function rememberFact(db, jid, name, fact) {
   db.users[jid].name = name;
   db.users[jid].lastSeen = new Date().toISOString();
 
-  // Cegah duplikasi fakta
   if (!db.users[jid].facts.includes(fact)) {
     db.users[jid].facts.push(fact);
-    // Batasi maksimal 10 fakta paling relevan per pengguna
-    if (db.users[jid].facts.length > 10) db.users[jid].facts.shift();
-    saveMemory(db);
+    if (db.users[jid].facts.length > 15) db.users[jid].facts.shift();
+    saveMemory(db); // Disimpan di latar belakang
   }
 }
 
-// Pembelajaran Otomatis: Tambah kata kotor baru hasil analisis AI
+// Belajar kata kotor otomatis
 export function autoLearnBadWord(db, word) {
   const cleanWord = word.toLowerCase().trim();
   if (cleanWord && !db.learnedWords.includes(cleanWord)) {
     db.learnedWords.push(cleanWord);
     saveMemory(db);
-    console.log(`🧠 [AUTO-LEARNING] Bot mempelajari kata kotor baru: "${cleanWord}"`);
   }
 }
