@@ -10,23 +10,42 @@ export function mulaiWeb() {
     let contentHtml = '';
     
     if (bot.connected) {
-      contentHtml = `<div class="status connected">✅ Bot Berhasil Terhubung!</div>`;
-    } else if (bot.qr) {
-      // Mengubah string QR dari Baileys menjadi Gambar QR Code di Web Browser
-      const qrImageUrl = `https://api.qrserver.com/v1/create-qr-code/?size=240x240&data=${encodeURIComponent(bot.qr)}`;
       contentHtml = `
-        <h3>Scan QR Code di Bawah Ini:</h3>
-        <img src="${qrImageUrl}" alt="QR Code" class="qr-img" />
-        <p class="timer-info">⏳ Waktu tersisa: 2 Menit (Otomatis Refresh)</p>
-      `;
-    } else if (bot.pairingCode) {
-      contentHtml = `
-        <h3>Kode Pairing WhatsApp:</h3>
-        <div class="otp-box">${bot.pairingCode}</div>
-        <p class="timer-info">Masukkan kode ini di WhatsApp -> Perangkat Tertaut</p>
+        <div class="card">
+          <div class="status connected">✅ Bot Berhasil Terhubung!</div>
+          <p style="color: #555; margin-top: 10px;">WhatsApp Bot Trade siap digunakan.</p>
+        </div>
       `;
     } else {
-      contentHtml = `<div class="loading">⏳ Sedang menyiapkan koneksi baru...</div>`;
+      const qrImageUrl = bot.qr 
+        ? `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(bot.qr)}`
+        : null;
+
+      const pairingText = bot.pairingCode 
+        ? bot.pairingCode 
+        : (process.env.PHONE_NUMBER ? "Sedang memuat OTP..." : "Isi PHONE_NUMBER di Railway Variables untuk OTP");
+
+      contentHtml = `
+        <div class="grid-container">
+          <!-- OPSI 1: QR CODE -->
+          <div class="card">
+            <h3>📱 Opsi 1: Scan QR Code</h3>
+            ${qrImageUrl 
+              ? `<img src="${qrImageUrl}" alt="QR Code" class="qr-img" />` 
+              : `<div class="loading">⏳ Menyiapkan QR Code...</div>`
+            }
+            <p class="sub-text">Buka WA -> Perangkat Tertaut -> Scan QR di atas</p>
+          </div>
+
+          <!-- OPSI 2: KODE OTP / PAIRING -->
+          <div class="card">
+            <h3>🔑 Opsi 2: Kode Pairing (OTP)</h3>
+            <div class="otp-box">${pairingText}</div>
+            <p class="sub-text">Buka WA -> Perangkat Tertaut -> Tautkan dengan Nomor Telepon</p>
+          </div>
+        </div>
+        <p class="timer-info">⏳ Sesi ini berlaku selama <b>2 Menit</b> (Halaman refresh otomatis)</p>
+      `;
     }
 
     const html = `
@@ -34,26 +53,27 @@ export function mulaiWeb() {
     <html lang="id">
     <head>
       <meta charset="UTF-8">
-      <title>Panel WhatsApp Bot</title>
+      <title>Panel Hubung WhatsApp Bot</title>
       <meta name="viewport" content="width=device-width, initial-scale=1">
-      <meta http-equiv="refresh" content="4"> <!-- Auto refresh halaman setiap 4 detik -->
+      <meta http-equiv="refresh" content="4"> <!-- Auto refresh setiap 4 detik -->
       <style>
         * { box-sizing: border-box; }
-        body { font-family: 'Segoe UI', Arial, sans-serif; background: #ece5dd; margin: 0; display: flex; justify-content: center; align-items: center; min-height: 100vh; }
-        .card { background: white; padding: 30px; border-radius: 16px; box-shadow: 0 8px 24px rgba(0,0,0,0.12); text-align: center; max-width: 400px; width: 90%; }
-        h2 { color: #075e54; margin-top: 0; font-size: 1.5em; }
-        .status.connected { color: #25D366; font-weight: bold; font-size: 1.2em; padding: 10px; background: #e8f5e9; border-radius: 8px; }
-        .qr-img { border: 4px solid #075e54; border-radius: 12px; margin: 15px 0; }
-        .otp-box { font-size: 2.2em; letter-spacing: 6px; font-weight: bold; background: #e8f5e9; color: #1b5e20; padding: 15px; border-radius: 10px; margin: 15px 0; border: 2px dashed #2e7d32; }
-        .timer-info { color: #666; font-size: 0.9em; margin-top: 8px; }
-        .loading { color: #075e54; font-weight: 500; font-size: 1.1em; padding: 20px 0; }
+        body { font-family: 'Segoe UI', Arial, sans-serif; background: #eef2f5; margin: 0; padding: 20px; display: flex; flex-direction: column; justify-content: center; align-items: center; min-height: 100vh; }
+        h2 { color: #075e54; margin-bottom: 20px; text-align: center; }
+        .grid-container { display: flex; flex-wrap: wrap; gap: 20px; justify-content: center; max-width: 800px; width: 100%; }
+        .card { background: white; padding: 25px; border-radius: 16px; box-shadow: 0 4px 15px rgba(0,0,0,0.08); text-align: center; flex: 1; min-width: 280px; }
+        h3 { color: #128C7E; margin-top: 0; font-size: 1.2em; }
+        .status.connected { color: #25D366; font-weight: bold; font-size: 1.3em; padding: 15px; background: #e8f5e9; border-radius: 10px; }
+        .qr-img { border: 3px solid #075e54; border-radius: 10px; margin: 10px 0; }
+        .otp-box { font-size: 2em; letter-spacing: 5px; font-weight: bold; background: #f0fdf4; color: #166534; padding: 15px; border-radius: 10px; margin: 15px 0; border: 2px dashed #22c55e; word-break: break-all; }
+        .sub-text { color: #666; font-size: 0.85em; margin: 5px 0 0 0; }
+        .timer-info { color: #475569; font-size: 0.95em; margin-top: 25px; text-align: center; background: #e2e8f0; padding: 8px 16px; border-radius: 20px; }
+        .loading { color: #64748b; font-style: italic; padding: 30px 0; }
       </style>
     </head>
     <body>
-      <div class="card">
-        <h2>🤖 Trade WhatsApp Bot</h2>
-        ${contentHtml}
-      </div>
+      <h2>🤖 Panel Koneksi Bot WhatsApp</h2>
+      ${contentHtml}
     </body>
     </html>
     `;
