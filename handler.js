@@ -1,38 +1,71 @@
 import { bot } from './status.js';
-import { loadMemory, saveMemory, rememberFact, autoLearnBadWord } from './memory.js';
+import { loadMemory, rememberFact } from './memory.js';
 
-// Muat database memori saat handler pertama kali dijalankan
-const dbMemory = loadMemory();
+let dbMemory = { users: {}, learnedWords: [], conversations: {} };
+
+// Inisialisasi memori
+loadMemory().then(data => { dbMemory = data; });
+
 const gameSessions = new Map();
 
-// AI Engine dengan Konteks Memori Jangka Panjang
-async function getAIResponseWithMemory(prompt, senderJid, senderName) {
+// AI Engine Tingkat Tinggi: Pintar, Detail, dan Empatis
+async function getAdvancedAIResponse(prompt, senderJid, senderName) {
+  const userMemory = dbMemory.users[senderJid] || { facts: [] };
+  const memoryContext = userMemory.facts.length > 0
+    ? `Fakta & konteks tentang ${senderName}: [${userMemory.facts.join('; ')}].`
+    : `Pengguna bernama ${senderName}.`;
+
+  // System Prompt Baru: Wawasan Luas, Detail, & Nyaman Diajak Ngobrol
+  const systemInstruction = 
+    `Kamu adalah AI Asisten Cerdas bernama ${bot.userName || 'Bot Trade AI'}. ` +
+    `Kamu memiliki wawasan yang sangat luas dan mendalam di berbagai bidang ilmu (sains, teknologi, sejarah, filsafat, seni) maupun kehidupan nyata (psikologi, hubungan, motivasi, dan kehidupan sehari-hari).\n` +
+    `Gaya bicaramu hangat, santai, empatis, dan sangat nyaman diajak berdiskusi. ` +
+    `Jika pengguna bertanya topik kompleks, berikan penjelasan yang detail, logis, dan mudah dipahami. ` +
+    `Jika pengguna hanya ingin curhat atau ngobrol santai, jadilah pendengar yang baik dan berikan respon yang mendukung.\n` +
+    `${memoryContext}`;
+
+  const fullPrompt = `${systemInstruction}\n\n${senderName}: ${prompt}\nAI:`;
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 7000);
+
   try {
-    const userMemory = dbMemory.users[senderJid] || { facts: [] };
-    const knownFacts = userMemory.facts.length > 0 
-      ? `Hal yang kamu ingat tentang ${senderName}: ${userMemory.facts.join(', ')}.` 
-      : `Kamu baru pertama kali mengobrol intensif dengan ${senderName}.`;
+    const res = await fetch(`https://text.pollinations.ai/${encodeURIComponent(fullPrompt)}`, {
+      signal: controller.signal
+    });
+    clearTimeout(timeoutId);
 
-    const systemPrompt = `Kamu adalah AI WhatsApp pintar yang bisa berpikir dan belajar sendiri. Namamu ${bot.userName || 'Bot AI'}.\n${knownFacts}\nJawablah pesan berikut secara alami, ramah, dan ringkas.`;
-    const fullPrompt = `${systemPrompt}\n\n${senderName}: ${prompt}\nAI:`;
-
-    const res = await fetch(`https://text.pollinations.ai/${encodeURIComponent(fullPrompt)}`);
     if (res.ok) {
-      const reply = await res.text();
-      return reply ? reply.trim() : null;
+      const text = await res.text();
+      if (text && text.trim()) return text.trim();
     }
   } catch (err) {
-    console.error('AI Memory Error:', err);
+    clearTimeout(timeoutId);
+    console.log('⚡ Mengalihkan ke mesin pemroses cadangan...');
   }
-  return 'Maaf, otak AI sedang menyinkronkan data memori. Coba kirim pesan lagi.';
+
+  // Jalur Cadangan Berbasis Pengetahuan Umum
+  try {
+    const fallbackRes = await fetch(`https://api.simsimi.vn/v1/simtalk`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ text: prompt, lc: 'id' })
+    });
+    const json = await fallbackRes.json();
+    if (json.message) return json.message;
+  } catch {
+    // Abaikan jika fallback sibuk
+  }
+
+  return `Menarik sekali topik ini, ${senderName}! Mari kita bedah lebih dalam. Apa sudut pandangmu mengenai hal ini?`;
 }
 
-// Analisis Latar Belakang AI untuk Belajar Fakta Pengguna
-async function extractAndLearnFacts(prompt, senderJid, senderName) {
-  // Hanya proses jika pesan mengandung informasi personal
-  const lower = prompt.toLowerCase();
-  if (lower.includes('nama saya') || lower.includes('suka') || lower.includes('hobi') || lower.includes('tinggal di')) {
-    rememberFact(dbMemory, senderJid, senderName, prompt);
+// Analisis Latar Belakang Informasi Penting
+function extractFactsAsync(text, jid, name) {
+  const lower = text.toLowerCase();
+  const triggers = ['nama saya', 'hobi saya', 'saya suka', 'saya tinggal di', 'cita-cita saya', 'saya merasa', 'saya kerja'];
+  if (triggers.some(t => lower.includes(t))) {
+    rememberFact(dbMemory, jid, name, text);
   }
 }
 
@@ -53,11 +86,10 @@ export function pasangPenjawab(sock) {
       ).trim();
 
       if (!rawText) continue;
-
       const textLower = rawText.toLowerCase();
 
       // ----------------------------------------------------
-      // 🛡️ 1. PROTEKSI GRUP (KATA KOTOR NATIVE + HASIL BELAJAR)
+      // 🛡️ 1. PROTEKSI GRUP OTOMATIS
       // ----------------------------------------------------
       if (isGroup) {
         const allBadWords = [...bot.badWords, ...dbMemory.learnedWords];
@@ -67,30 +99,24 @@ export function pasangPenjawab(sock) {
         if (hasBadWord || hasPornLink) {
           try {
             await sock.sendMessage(jid, { delete: msg.key });
-            if (hasBadWord) {
-              bot.stats.totalDeletedBadWords++;
-              await sock.sendMessage(jid, {
-                text: `⚠️ Pesan terhapus otomatis! Mengandung kata toxic terdeteksi.`,
-                mentions: [msg.key.participant]
-              });
-            } else if (hasPornLink) {
-              bot.stats.totalDeletedPornLinks++;
-              await sock.sendMessage(jid, {
-                text: `🔞 Link terlarang terhapus otomatis oleh proteksi bot!`,
-                mentions: [msg.key.participant]
-              });
-            }
+            await sock.sendMessage(jid, {
+              text: hasBadWord 
+                ? `⚠️ Pesan dihapus otomatis (Mengandung kata kotor).` 
+                : `🔞 Link terlarang dihapus otomatis oleh sistem proteksi.`,
+              mentions: [msg.key.participant]
+            });
             continue;
-          } catch (err) {
-            console.log('⚠️ Gagal hapus pesan proteksi:', err?.message);
+          } catch (e) {
+            console.log('⚠️ Gagal proteksi:', e?.message);
           }
         }
       }
 
       // ----------------------------------------------------
-      // 📥 2. DETEKSI OTOMATIS LINK MEDIA (TIKTOK / YT)
+      // 📥 2. DOWNLOADER OTOMATIS (TIKTOK & YOUTUBE)
       // ----------------------------------------------------
       if (textLower.includes('tiktok.com') || textLower.includes('vt.tiktok.com')) {
+        await sock.sendPresenceUpdate('composing', jid);
         await sock.sendMessage(jid, { text: '⏳ Mengunduh video TikTok HD...' }, { quoted: msg });
         try {
           const apiRes = await fetch(`https://www.tikwm.com/api/?url=${encodeURIComponent(rawText)}`);
@@ -98,16 +124,17 @@ export function pasangPenjawab(sock) {
           if (json.code === 0 && json.data) {
             await sock.sendMessage(jid, {
               video: { url: json.data.hdplay || json.data.play },
-              caption: `🎬 *TikTok HD No Watermark*`
+              caption: `🎬 *TikTok HD Video*`
             }, { quoted: msg });
           }
         } catch {
-          await sock.sendMessage(jid, { text: '❌ Gagal mengunduh TikTok.' }, { quoted: msg });
+          await sock.sendMessage(jid, { text: '❌ Gagal unduh TikTok.' }, { quoted: msg });
         }
         continue;
       }
 
       if (textLower.includes('youtube.com') || textLower.includes('youtu.be')) {
+        await sock.sendPresenceUpdate('composing', jid);
         await sock.sendMessage(jid, { text: '⏳ Memproses video YouTube HD...' }, { quoted: msg });
         try {
           const apiRes = await fetch(`https://api.vreden.web.id/api/ytmp4?url=${encodeURIComponent(rawText)}`);
@@ -119,25 +146,23 @@ export function pasangPenjawab(sock) {
             }, { quoted: msg });
           }
         } catch {
-          await sock.sendMessage(jid, { text: '❌ Gagal mengunduh YouTube.' }, { quoted: msg });
+          await sock.sendMessage(jid, { text: '❌ Gagal unduh YouTube.' }, { quoted: msg });
         }
         continue;
       }
 
       // ----------------------------------------------------
-      // 📌 3. PERINTAH DENGAN RESPON AKTIF
+      // 📌 3. PERINTAH DENGAN RESPON KONTAN
       // ----------------------------------------------------
       const args = rawText.split(' ');
       const cmd = args[0].toLowerCase();
-      const param = args.slice(1).join(' ');
 
       if (cmd === 'menu' || cmd === 'help') {
-        let menuText = `📋 *MENU BOT PINTAR*\n\n`;
+        let menuText = `📋 *MENU UTAMA BOT*\n\n`;
         bot.commands.forEach(item => {
           menuText += `• *${item.cmd}* : ${item.desc}\n`;
         });
-        menuText += `\n🧠 *Memori Dipelajari:* ${Object.keys(dbMemory.users).length} Pengguna Terrekam`;
-        menuText += `\n🛡️ *Kata Baru Dipelajari:* ${dbMemory.learnedWords.length} Kata`;
+        menuText += `\n🧠 *Pengguna Terdaftar Memori:* ${Object.keys(dbMemory.users).length}`;
         await sock.sendMessage(jid, { text: menuText }, { quoted: msg });
         continue;
       }
@@ -145,34 +170,31 @@ export function pasangPenjawab(sock) {
       if (cmd === 'memori') {
         const userMem = dbMemory.users[jid];
         if (userMem && userMem.facts.length > 0) {
-          await sock.sendMessage(jid, { text: `🧠 *Memori Bot tentang kamu:*\n- ${userMem.facts.join('\n- ')}` }, { quoted: msg });
+          await sock.sendMessage(jid, { text: `🧠 *Fakta yang kuingat tentangmu:*\n- ${userMem.facts.join('\n- ')}` }, { quoted: msg });
         } else {
-          await sock.sendMessage(jid, { text: '🧠 Aku belum merekam fakta khusus tentangmu. Coba ceritakan kesukaan atau hobimu!' }, { quoted: msg });
+          await sock.sendMessage(jid, { text: '🧠 Belum ada fakta khusus yang kucatat. Coba ceritakan cita-cita atau hobimu!' }, { quoted: msg });
         }
         continue;
       }
 
       if (cmd === 'ping') {
-        await sock.sendMessage(jid, { text: `🏓 Pong! Sistem memori & AI aktif.` }, { quoted: msg });
+        await sock.sendMessage(jid, { text: `🏓 Pong! Sistem AI pintar aktif.` }, { quoted: msg });
         continue;
       }
 
       if (cmd === 'status') {
-        await sock.sendMessage(jid, { 
-          text: `📊 *STATUS BOT PINTAR*\n• Status: Online & Learning Engine Active\n• Pengguna Diingat: ${Object.keys(dbMemory.users).length}\n• Kata Otomatis Dipelajari: ${dbMemory.learnedWords.length}` 
-        }, { quoted: msg });
+        await sock.sendMessage(jid, { text: `🟢 *Status:* Online & AI Multitalenta Aktif` }, { quoted: msg });
         continue;
       }
 
       // ----------------------------------------------------
-      // 🧠 4. PEMBELAJARAN OTOMATIS & RESPON CHAT AI
+      // 🤖 4. PEMROSES CHAT AI DETAIL & CERDAS
       // ----------------------------------------------------
-      // Ekstrak fakta pengguna untuk disimpan ke memory.json
-      extractAndLearnFacts(rawText, jid, pushName);
+      await sock.sendPresenceUpdate('composing', jid);
+      extractFactsAsync(rawText, jid, pushName);
 
-      // Dapatkan jawaban dari AI yang memanfaatkan memori masa lalu
-      const aiResponse = await getAIResponseWithMemory(rawText, jid, pushName);
-      await sock.sendMessage(jid, { text: aiResponse }, { quoted: msg });
+      const reply = await getAdvancedAIResponse(rawText, jid, pushName);
+      await sock.sendMessage(jid, { text: reply }, { quoted: msg });
     }
   });
 }
