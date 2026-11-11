@@ -1,7 +1,6 @@
 import { getReply } from './rules.js';
 import { bot } from './status.js';
 
-// Penyimpanan sesi game tebak angka per pengguna
 const gameSessions = new Map();
 
 export function pasangPenjawab(sock) {
@@ -11,8 +10,7 @@ export function pasangPenjawab(sock) {
       if (!msg.message || msg.key.fromMe) continue;
 
       const jid = msg.key.remoteJid;
-      if (!jid || jid.endsWith('@g.us') || jid === 'status@broadcast') continue;
-
+      const isGroup = jid.endsWith('@g.us');
       const pushName = msg.pushName || 'Pengguna';
       const text = (
         msg.message.conversation ||
@@ -23,147 +21,166 @@ export function pasangPenjawab(sock) {
 
       if (!text) continue;
 
+      const textLower = text.toLowerCase();
+
+      // ============================================================
+      // 🛡️ SISTEM PROTEKSI GRUP (KATA KOTOR & LINK PORNOGRAFI)
+      // ============================================================
+      if (isGroup) {
+        // 1. Cek Kata Kotor
+        const hasBadWord = bot.badWords.some(word => textLower.includes(word.toLowerCase()));
+        
+        // 2. Cek Link Pornografi
+        const hasPornLink = bot.pornDomains.some(domain => textLower.includes(domain.toLowerCase()));
+
+        if (hasBadWord || hasPornLink) {
+          try {
+            // Hapus Pesan Pelanggar
+            await sock.sendMessage(jid, { delete: msg.key });
+
+            if (hasBadWord) {
+              bot.stats.totalDeletedBadWords++;
+              await sock.sendMessage(jid, { 
+                text: `🚫 *PERINGATAN PROTEKSI GRUP*\n\nPesan dari @${msg.key.participant.split('@')[0]} telah dihapus otomatis karena mengandung *Kata Kotor/Toxic*.`,
+                mentions: [msg.key.participant]
+              });
+            } else if (hasPornLink) {
+              bot.stats.totalDeletedPornLinks++;
+              await sock.sendMessage(jid, { 
+                text: `🔞 *DILARANG MEMBAGIKAN LINK PORNOGRAFI*\n\nPesan dari @${msg.key.participant.split('@')[0]} dihapus otomatis oleh sistem keamanan bot!`,
+                mentions: [msg.key.participant]
+              });
+            }
+            continue; // Hentikan eksekusi perintah jika melanggar
+          } catch (err) {
+            console.log('⚠️ Gagal menghapus pesan (Pastikan bot adalah Admin Grup):', err?.message);
+          }
+        }
+      }
+
+      // ============================================================
+      // 🎮 EXECUTION FITUR & COMMANDS
+      // ============================================================
       try {
         const args = text.split(' ');
         const command = args[0].toLowerCase();
-        const urlInput = args[1] || '';
+        const inputParam = args.slice(1).join(' ');
 
-        // ----------------------------------------------------
-        // 🎮 FITUR GAME: TEBAK ANGKA (1 - 10)
-        // ----------------------------------------------------
-        if (command === '!game' || command === '!tebak') {
-          const angkaRahasia = Math.floor(Math.random() * 10) + 1;
-          gameSessions.set(jid, angkaRahasia);
-          await sock.sendMessage(jid, { 
-            text: `🎮 *GAME TEBAK ANGKA*\n\nHalo ${pushName}, aku sudah memilih angka antara *1 sampai 10*.\nBalas pesan ini dengan tebakan angkamu! (Contoh ketik: *5*)` 
-          }, { quoted: msg });
-          continue;
-        }
-
-        // Cek jika pengguna sedang dalam sesi bermain game
-        if (gameSessions.has(jid) && !text.startsWith('!')) {
-          const tebakan = parseInt(text, 10);
-          const target = gameSessions.get(jid);
-
-          if (!isNaN(tebakan)) {
-            if (tebakan === target) {
-              gameSessions.delete(jid);
-              await sock.sendMessage(jid, { text: `🎉 *SELAMAT!* Tebakanmu benar! Angkanya adalah *${target}*.` }, { quoted: msg });
-            } else if (tebakan < target) {
-              await sock.sendMessage(jid, { text: '❌ Tebakanmu terlalu *KECIL*. Coba angka yang lebih besar!' }, { quoted: msg });
-            } else {
-              await sock.sendMessage(jid, { text: '❌ Tebakanmu terlalu *BESAR*. Coba angka yang lebih kecil!' }, { quoted: msg });
-            }
-            continue;
-          }
-        }
-
-        // ----------------------------------------------------
-        // 🎵 FITUR DOWNLOADER: TIKTOK (TANPA WATERMARK / HD)
-        // ----------------------------------------------------
-        if (command === '!tiktok' || command === '!tt') {
-          if (!urlInput.includes('tiktok.com')) {
-            await sock.sendMessage(jid, { text: '⚠️ Format salah!\nContoh: `!tiktok https://vt.tiktok.com/xxxx/`' }, { quoted: msg });
-            continue;
-          }
-
-          await sock.sendMessage(jid, { text: '⏳ Sedang mengunduh video TikTok HD tanpa watermark...' }, { quoted: msg });
-
-          try {
-            const apiRes = await fetch(`https://www.tikwm.com/api/?url=${encodeURIComponent(urlInput)}`);
-            const json = await apiRes.json();
-
-            if (json.code === 0 && json.data) {
-              const videoUrl = json.data.hdplay || json.data.play;
-              const title = json.data.title || 'Video TikTok';
-              const author = json.data.author?.nickname || 'TikTok';
-
-              await sock.sendMessage(jid, {
-                video: { url: videoUrl },
-                caption: `🎬 *TIKTOK DOWNLOADER HD*\n\n📌 *Judul:* ${title}\n👤 *Kreator:* ${author}\n✨ *Status:* Tanpa Watermark`
-              }, { quoted: msg });
-            } else {
-              await sock.sendMessage(jid, { text: '❌ Gagal mengambil video TikTok. Pastikan link publik dan valid.' }, { quoted: msg });
-            }
-          } catch (err) {
-            console.error(err);
-            await sock.sendMessage(jid, { text: '❌ Terjadi kesalahan saat mengunduh video TikTok.' }, { quoted: msg });
-          }
-          continue;
-        }
-
-        // ----------------------------------------------------
-        // 📺 FITUR DOWNLOADER: YOUTUBE (HD VIDEO)
-        // ----------------------------------------------------
-        if (command === '!youtube' || command === '!yt' || command === '!ytmp4') {
-          if (!urlInput.includes('youtu')) {
-            await sock.sendMessage(jid, { text: '⚠️ Format salah!\nContoh: `!youtube https://youtu.be/xxxx`' }, { quoted: msg });
-            continue;
-          }
-
-          await sock.sendMessage(jid, { text: '⏳ Sedang memproses video YouTube HD...' }, { quoted: msg });
-
-          try {
-            const apiRes = await fetch(`https://api.vreden.web.id/api/ytmp4?url=${encodeURIComponent(urlInput)}`);
-            const json = await apiRes.json();
-
-            if (json.result && json.result.download && json.result.download.url) {
-              const videoUrl = json.result.download.url;
-              const title = json.result.title || 'Video YouTube';
-
-              await sock.sendMessage(jid, {
-                video: { url: videoUrl },
-                caption: `🎬 *YOUTUBE DOWNLOADER HD*\n\n📌 *Judul:* ${title}\n✨ *Kualitas:* HD`
-              }, { quoted: msg });
-            } else {
-              await sock.sendMessage(jid, { text: '❌ Gagal mengunduh video YouTube. Coba link video lainnya.' }, { quoted: msg });
-            }
-          } catch (err) {
-            console.error(err);
-            await sock.sendMessage(jid, { text: '❌ Gagal memproses unduhan YouTube.' }, { quoted: msg });
-          }
-          continue;
-        }
-
-        // ----------------------------------------------------
-        // 📜 MENU UTAMA & DAFTAR PERINTAH
-        // ----------------------------------------------------
+        // 📜 MENU DYNAMIC (Otomatis menampilkan semua menu yang terdaftar)
         if (command === '!menu' || command === '!help') {
-          const menuText = `╔════════════════════════╗
-║    🌟 *BOT TRADE MEDIA & GAME* 🌟 ║
-╚════════════════════════╝
+          // Kelompokkan menu berdasarkan kategori
+          const categories = {};
+          bot.commands.forEach(c => {
+            if (!categories[c.category]) categories[c.category] = [];
+            categories[c.category].push(c);
+          });
 
-Halo *${pushName}*! Berikut daftar perintah aktif yang bisa kamu gunakan:
+          let menuText = `╔════════════════════════╗\n`;
+          menuText += `║    🌟 *PANEL BOT PUBLIK PRO* 🌟  ║\n`;
+          menuText += `╚════════════════════════╝\n\n`;
+          menuText += `Halo *${pushName}*!\nBerikut adalah daftar seluruh fitur aktif bot:\n\n`;
 
-📥 *Media Downloader:*
-🔹 *!tiktok <link>* - Download video TikTok (No Watermark HD)
-🔹 *!youtube <link>* - Download video YouTube HD
+          for (const [cat, cmds] of Object.entries(categories)) {
+            menuText += `📌 *KATEGORI ${cat.toUpperCase()}*\n`;
+            cmds.forEach(item => {
+              menuText += `🔹 *${item.cmd}* : _${item.desc}_\n`;
+            });
+            menuText += `\n`;
+          }
 
-🎮 *Fitur Hiburan & Game:*
-🔹 *!game* - Main Game Tebak Angka
-
-⚙️ *Pengaturan & Status:*
-🔹 *!status* - Cek status koneksi bot
-🔹 *!setnama <nama>* - Ubah nama profil WhatsApp bot
-
-💡 _Ketik perintah sesuai contoh di atas untuk menjalankannya!_`;
+          menuText += `🛡️ *Status Proteksi Grup:* AKTIF\n`;
+          menuText += `💡 _Menu ini diperbarui secara otomatis setiap ada fitur baru!_`;
 
           await sock.sendMessage(jid, { text: menuText }, { quoted: msg });
           continue;
         }
 
-        if (command === '!status') {
-          await sock.sendMessage(jid, { text: `🟢 *Status Bot:* Online & Aktif\n👤 *Nama Profil:* ${bot.userName || 'Bot'}\n📞 *Nomor:* ${bot.userPhone || '-'}` }, { quoted: msg });
+        // 🎮 GAME TEBAK ANGKA
+        if (command === '!game') {
+          const targetNum = Math.floor(Math.random() * 10) + 1;
+          gameSessions.set(jid, targetNum);
+          await sock.sendMessage(jid, { text: `🎮 *GAME TEBAK ANGKA*\n\nTebak angka antara *1 - 10*. Balas pesan ini dengan angkamu!` }, { quoted: msg });
           continue;
         }
 
-        // Jalankan aturan balasan asli dari rules.js jika tidak ada command di atas yang cocok
+        if (gameSessions.has(jid) && !text.startsWith('!')) {
+          const guess = parseInt(text, 10);
+          const target = gameSessions.get(jid);
+          if (!isNaN(guess)) {
+            if (guess === target) {
+              gameSessions.delete(jid);
+              await sock.sendMessage(jid, { text: `🎉 *BENAR!* Angkanya adalah ${target}.` }, { quoted: msg });
+            } else {
+              await sock.sendMessage(jid, { text: guess < target ? '❌ Terlalu KECIL!' : '❌ Terlalu BESAR!' }, { quoted: msg });
+            }
+            continue;
+          }
+        }
+
+        // 📥 TIKTOK DOWNLOADER HD
+        if (command === '!tiktok' || command === '!tt') {
+          if (!inputParam.includes('tiktok.com')) {
+            await sock.sendMessage(jid, { text: '⚠️ Masukkan link TikTok yang valid!' }, { quoted: msg });
+            continue;
+          }
+          await sock.sendMessage(jid, { text: '⏳ Mengunduh video TikTok HD tanpa watermark...' }, { quoted: msg });
+          try {
+            const apiRes = await fetch(`https://www.tikwm.com/api/?url=${encodeURIComponent(inputParam)}`);
+            const json = await apiRes.json();
+            if (json.code === 0 && json.data) {
+              await sock.sendMessage(jid, { video: { url: json.data.hdplay || json.data.play }, caption: `🎬 *TikTok HD No Watermark*\n\n${json.data.title || ''}` }, { quoted: msg });
+            } else {
+              await sock.sendMessage(jid, { text: '❌ Video gagal diunduh.' }, { quoted: msg });
+            }
+          } catch {
+            await sock.sendMessage(jid, { text: '❌ Error downloader TikTok.' }, { quoted: msg });
+          }
+          continue;
+        }
+
+        // 📺 YOUTUBE DOWNLOADER HD
+        if (command === '!youtube' || command === '!yt') {
+          if (!inputParam.includes('youtu')) {
+            await sock.sendMessage(jid, { text: '⚠️ Masukkan link YouTube yang valid!' }, { quoted: msg });
+            continue;
+          }
+          await sock.sendMessage(jid, { text: '⏳ Memproses video YouTube HD...' }, { quoted: msg });
+          try {
+            const apiRes = await fetch(`https://api.vreden.web.id/api/ytmp4?url=${encodeURIComponent(inputParam)}`);
+            const json = await apiRes.json();
+            if (json.result?.download?.url) {
+              await sock.sendMessage(jid, { video: { url: json.result.download.url }, caption: `🎬 *YouTube HD Video*` }, { quoted: msg });
+            } else {
+              await sock.sendMessage(jid, { text: '❌ Video gagal diunduh.' }, { quoted: msg });
+            }
+          } catch {
+            await sock.sendMessage(jid, { text: '❌ Error downloader YouTube.' }, { quoted: msg });
+          }
+          continue;
+        }
+
+        // 🛡️ TAMBAH KATA TERLARANG MANUAL
+        if (command === '!addkata') {
+          if (!inputParam) {
+            await sock.sendMessage(jid, { text: '⚠️ Format: `!addkata <kata>`' }, { quoted: msg });
+            continue;
+          }
+          bot.badWords.push(inputParam.toLowerCase());
+          await sock.sendMessage(jid, { text: `✅ Kata *"${inputParam}"* telah ditambahkan ke sistem proteksi!` }, { quoted: msg });
+          continue;
+        }
+
+        if (command === '!status') {
+          await sock.sendMessage(jid, { text: `🟢 *Status Bot:* Online\n🛡️ *Kata Kotor Terhapus:* ${bot.stats.totalDeletedBadWords}\n🔞 *Link Pornografi Dihapus:* ${bot.stats.totalDeletedPornLinks}` }, { quoted: msg });
+          continue;
+        }
+
         const balasan = getReply(text);
         if (balasan) {
           await sock.sendMessage(jid, { text: balasan }, { quoted: msg });
         }
       } catch (e) {
-        console.log('⚠️ Gagal membalas:', e?.message || e);
+        console.log('⚠️ Error Handler:', e?.message);
       }
     }
   });
