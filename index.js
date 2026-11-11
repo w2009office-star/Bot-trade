@@ -17,11 +17,15 @@ async function start() {
   const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
   const { version } = await fetchLatestBaileysVersion();
 
+  console.log('\n=========================================');
+  console.log(' 🚀 MEMULAI BOT WHATSAPP PUBLIK TRADE 🚀');
+  console.log('=========================================\n');
+
   const sock = makeWASocket({
     version,
     auth: state,
     logger: pino({ level: 'silent' }),
-    browser: ['Bot Trade Pro', 'Chrome', '1.0.0'],
+    browser: ['Bot Trade Public', 'Chrome', '1.0.0'],
     printQRInTerminal: false
   });
 
@@ -32,10 +36,10 @@ async function start() {
   sock.ev.on('creds.update', saveCreds);
   pasangPenjawab(sock);
 
-  // Timer Batas Waktu 2 Menit (120.000 ms)
+  // Batas waktu 2 menit untuk menghubungkan nomor bot pertama kali
   const timerKoneksi = setTimeout(() => {
     if (!bot.connected) {
-      console.log('⏳ Batas waktu 2 menit habis. Memuat ulang QR & OTP...');
+      console.log('⏳ [TIMER 2 MENIT] Batas waktu habis. Mengulang sesi...');
       bot.qr = null;
       bot.pairingCode = null;
       sock.ws.close();
@@ -43,18 +47,10 @@ async function start() {
   }, 120000);
 
   sock.ev.on('connection.update', async ({ connection, lastDisconnect, qr }) => {
-    if (qr) {
-      bot.qr = qr; // Simpan QR Code
-      
-      // Jika ada nomor telepon di Variables Railway, minta juga kode OTP-nya
+    if (qr && !bot.connected) {
+      bot.qr = qr;
       if (PHONE && !bot.registered && !bot.pairingCode) {
-        setTimeout(async () => {
-          try {
-            await mintaKodePairing(sock, PHONE);
-          } catch (err) {
-            console.log('Gagal membuat kode pairing:', err);
-          }
-        }, 3000);
+        setTimeout(() => mintaKodePairing(sock, PHONE), 2000);
       }
     }
 
@@ -64,13 +60,13 @@ async function start() {
       bot.registered = true;
       bot.qr = null;
       bot.pairingCode = null;
-      console.log('✅ Bot terhubung ke WhatsApp');
+      console.log('✅ [BERHASIL] Bot Aktif & Siap Melayani Publik!');
     } else if (connection === 'close') {
       clearTimeout(timerKoneksi);
       bot.connected = false;
       const code = lastDisconnect?.error?.output?.statusCode;
       if (code === DisconnectReason.loggedOut) {
-        console.log('❌ Session Logged Out.');
+        console.log('❌ [LOGOUT] Sesi dihapus. Membuka sesi baru...');
         fs.rmSync(AUTH_DIR, { recursive: true, force: true });
       }
       setTimeout(start, 3000);
