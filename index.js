@@ -1,9 +1,12 @@
+import fs from 'fs';
 import makeWASocket, {
   useMultiFileAuthState,
   DisconnectReason,
   fetchLatestBaileysVersion,
 } from '@whiskeysockets/baileys';
 import pino from 'pino';
+import { bot } from './status.js';
+import { mulaiWeb } from './web.js';
 import { pasangPenjawab } from './handler.js';
 import { mintaKodePairing } from './pairing.js';
 
@@ -21,31 +24,30 @@ async function start() {
     browser: ['WA Bot', 'Chrome', '1.0.0'],
   });
 
-  if (!sock.authState.creds.registered) {
-    if (!PHONE) {
-      console.log('Isi variable PHONE_NUMBER (contoh: 628123456789) lalu deploy ulang.');
-      process.exit(1);
-    }
-    mintaKodePairing(sock, PHONE);
-  }
+  bot.sock = sock;
+  bot.connected = false;
+  bot.registered = !!sock.authState.creds.registered;
+  if (!bot.registered && PHONE) mintaKodePairing(sock, PHONE);
 
   sock.ev.on('creds.update', saveCreds);
   pasangPenjawab(sock);
 
   sock.ev.on('connection.update', ({ connection, lastDisconnect }) => {
     if (connection === 'open') {
+      bot.connected = true;
+      bot.registered = true;
       console.log('✅ Bot terhubung ke WhatsApp');
     } else if (connection === 'close') {
+      bot.connected = false;
       const code = lastDisconnect?.error?.output?.statusCode;
       if (code === DisconnectReason.loggedOut) {
-        console.log('❌ Logout. Hapus folder auth lalu pairing ulang.');
-        process.exit(1);
-      } else {
-        console.log('Koneksi putus, mencoba lagi...');
-        start();
+        console.log('❌ Logout. Sesi dihapus, hubungkan ulang lewat halaman web.');
+        fs.rmSync(AUTH_DIR, { recursive: true, force: true });
       }
+      start();
     }
   });
 }
 
+mulaiWeb();
 start();
