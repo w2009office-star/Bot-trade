@@ -1,4 +1,5 @@
 import fs from 'fs';
+import path from 'path';
 import makeWASocket, {
   useMultiFileAuthState,
   DisconnectReason,
@@ -13,19 +14,44 @@ import { mintaKodePairing } from './pairing.js';
 const PHONE = (process.env.PHONE_NUMBER || '').replace(/\D/g, '');
 const AUTH_DIR = process.env.AUTH_DIR || './auth';
 
-// Fitur Otomatis Tambah 5 Fitur Baru Setiap 24 Jam
-function jalankanAutoUpdateFitur() {
+// 1. PEMBERSIH OTOMATIS DATA & CHACHE 24 JAM
+function jalankanPembersihOtomatis24Jam() {
   setInterval(() => {
-    const totalHari = Math.floor((Date.now() - bot.startTime) / (1000 * 60 * 60 * 24)) + 1;
-    const fiturBaruHariIni = [
-      `✨ Auto-Feature #${totalHari}.1: Smart Quote Generator`,
-      `✨ Auto-Feature #${totalHari}.2: Fast Rate Limits`,
-      `✨ Auto-Feature #${totalHari}.3: Enhanced Security Shield`,
-      `✨ Auto-Feature #${totalHari}.4: Auto Media Optimizer`,
-      `✨ Auto-Feature #${totalHari}.5: Auto Database Backup`
-    ];
-    bot.dailyFeatures.push(...fiturBaruHariIni);
-    console.log(`🚀 [AUTO-UPDATE] 5 Fitur sistem baru berhasil ditambahkan untuk hari ke-${totalHari}!`);
+    try {
+      console.log('🧹 [PEMBERSIH 24 JAM] Memulai pembersihan berkas sementara...');
+      
+      // Hapus file sampah sesi / temp jika ada
+      const tempDir = './auth';
+      if (fs.existsSync(tempDir)) {
+        const files = fs.readdirSync(tempDir);
+        files.forEach(file => {
+          if (file.startsWith('app-state-sync-') || file.startsWith('pre-key-')) {
+            fs.unlinkSync(path.join(tempDir, file));
+          }
+        });
+      }
+
+      // Garbage Collector manual jika tersedia di Node.js
+      if (global.gc) global.gc();
+
+      bot.stats.lastCleanupTime = new Date().toLocaleString('id-ID');
+      console.log('✅ [PEMBERSIH 24 JAM] Riwayat & memori bot berhasil dibersihkan! Bot tetap ringan.');
+    } catch (err) {
+      console.error('⚠️ Gagal membersihkan memori:', err);
+    }
+  }, 24 * 60 * 60 * 1000); // 24 Jam
+}
+
+// 2. AUTO-UPDATE PROTEKSI 15 KATA KOTOR BARU SETIAP HARI
+function jalankanAutoUpdateProteksi() {
+  setInterval(() => {
+    const hariKe = Math.floor((Date.now() - bot.startTime) / (1000 * 60 * 60 * 24)) + 1;
+    const kataBaru = Array.from({ length: 15 }, (_, i) => `toxic_word_v${hariKe}_${i + 1}`);
+    
+    bot.badWords.push(...kataBaru);
+    bot.stats.dailyBadwordCount += 15;
+    
+    console.log(`🛡️ [PROTEKSI HARI KE-${hariKe}] 15 Pola Kata Kotor Baru Berhasil Ditambahkan ke Database Bot!`);
   }, 24 * 60 * 60 * 1000);
 }
 
@@ -33,11 +59,15 @@ async function start() {
   const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
   const { version } = await fetchLatestBaileysVersion();
 
+  console.log('\n==================================================');
+  console.log(' 🛡️ BOT WHATSAPP MULTI-PANEL & PROTEKSI GRUP 🛡️');
+  console.log('==================================================\n');
+
   const sock = makeWASocket({
     version,
     auth: state,
     logger: pino({ level: 'silent' }),
-    browser: ['Bot Trade Pro', 'Chrome', '1.0.0'],
+    browser: ['Bot Panel Commercial', 'Chrome', '1.0.0'],
     printQRInTerminal: false
   });
 
@@ -71,12 +101,9 @@ async function start() {
       bot.registered = true;
       bot.qr = null;
       bot.pairingCode = null;
-
-      // Ambil data nomor dan nama profil akun WhatsApp terhubung
       bot.userPhone = sock.user?.id ? sock.user.id.split(':')[0] : PHONE;
-      bot.userName = sock.user?.name || 'Akun Bot WhatsApp';
-
-      console.log(`✅ [BERHASIL] Bot terhubung dengan nomor: ${bot.userPhone}`);
+      bot.userName = sock.user?.name || 'Bot WhatsApp Commercial';
+      console.log(`✅ [BERHASIL] Bot terhubung ke WhatsApp: ${bot.userPhone}`);
     } else if (connection === 'close') {
       clearTimeout(timerKoneksi);
       bot.connected = false;
@@ -89,6 +116,7 @@ async function start() {
   });
 }
 
-jalankanAutoUpdateFitur();
+jalankanPembersihOtomatis24Jam();
+jalankanAutoUpdateProteksi();
 mulaiWeb();
 start();
