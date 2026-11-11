@@ -5,7 +5,6 @@ import makeWASocket, {
   fetchLatestBaileysVersion,
 } from '@whiskeysockets/baileys';
 import pino from 'pino';
-import qrcodeTerminal from 'qrcode-terminal';
 import { bot } from './status.js';
 import { mulaiWeb } from './web.js';
 import { pasangPenjawab } from './handler.js';
@@ -22,7 +21,7 @@ async function start() {
     version,
     auth: state,
     logger: pino({ level: 'silent' }),
-    browser: ['Bot Trade', 'Chrome', '1.0.0'],
+    browser: ['Bot Trade Pro', 'Chrome', '1.0.0'],
     printQRInTerminal: false
   });
 
@@ -30,29 +29,32 @@ async function start() {
   bot.connected = false;
   bot.registered = !!sock.authState.creds.registered;
 
-  if (!bot.registered && PHONE) {
-    mintaKodePairing(sock, PHONE);
-  }
-
   sock.ev.on('creds.update', saveCreds);
   pasangPenjawab(sock);
 
-  // Timer batas waktu 2 menit
+  // Timer Batas Waktu 2 Menit (120.000 ms)
   const timerKoneksi = setTimeout(() => {
     if (!bot.connected) {
-      console.log('⏳ Batas waktu 2 menit habis. Memuat ulang sesi...');
+      console.log('⏳ Batas waktu 2 menit habis. Memuat ulang QR & OTP...');
       bot.qr = null;
       bot.pairingCode = null;
       sock.ws.close();
     }
   }, 120000);
 
-  sock.ev.on('connection.update', ({ connection, lastDisconnect, qr }) => {
+  sock.ev.on('connection.update', async ({ connection, lastDisconnect, qr }) => {
     if (qr) {
-      bot.qr = qr; // Simpan QR untuk ditampilkan di website
-      if (!PHONE) {
-        console.log('\n--- SCAN QR CODE (Batas 2 Menit) ---');
-        qrcodeTerminal.generate(qr, { small: true });
+      bot.qr = qr; // Simpan QR Code
+      
+      // Jika ada nomor telepon di Variables Railway, minta juga kode OTP-nya
+      if (PHONE && !bot.registered && !bot.pairingCode) {
+        setTimeout(async () => {
+          try {
+            await mintaKodePairing(sock, PHONE);
+          } catch (err) {
+            console.log('Gagal membuat kode pairing:', err);
+          }
+        }, 3000);
       }
     }
 
