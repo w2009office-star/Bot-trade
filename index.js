@@ -18,6 +18,12 @@ const MEMORY_FILE = './memory.json';
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY || '';
 const OWNER_NAME = process.env.OWNER_NAME || 'Owner Bot';
 
+const DEFAULT_HEADERS = {
+  'User-Agent':
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
+  Accept: 'application/json, text/plain, */*',
+};
+
 const bot = {
   sock: null,
   connected: false,
@@ -36,11 +42,11 @@ const bot = {
 
   badWords: [
     'anjing', 'babi', 'kunyuk', 'bajingan', 'goblok',
-    'tolol', 'bangsat', 'brengsek', 'jancok', 'pantek'
+    'tolol', 'bangsat', 'brengsek', 'jancok', 'pantek',
   ],
 
   blockedDomains: [
-    'judionline', 'slotgacor', 'situs-terlarang.com', 'link-spam.xyz', 'phishing-link.net'
+    'judionline', 'slotgacor', 'situs-terlarang.com', 'link-spam.xyz', 'phishing-link.net',
   ],
 };
 
@@ -53,25 +59,25 @@ const MENU_CATEGORIES = {
     'o1', 'o3', 'copilot', 'deepseek', 'deepseekr1', 'deepseekcoder',
     'deepseekmath', 'gemini', 'geminipro', 'geminiflash', 'grok',
     'claude', 'claudesonnet', 'qwen', 'llama3', 'mistral',
-    'perplexity', 'mathgpt', 'grammar', 'memori', 'resetmemori'
+    'perplexity', 'mathgpt', 'grammar', 'memori', 'resetmemori',
   ],
   MAIN: [
     'menu', 'allmenu', 'aimenu', 'downloadmenu', 'searchmenu',
     'animemenu', 'funmenu', 'groupmenu', 'logomenu', 'toolsmenu',
     'ownermenu', 'ping', 'ping2', 'alive', 'runtime', 'uptime',
-    'status', 'owner', 'update', 'githubstalk'
+    'status', 'owner', 'update', 'githubstalk',
   ],
   DOWNLOAD: [
     'tiktok', 'tt', 'ttmp3', 'ytmp4', 'ytmp3', 'ytdl', 'yts',
     'play', 'song', 'video', 'igdl', 'fb', 'twitter', 'capcut',
-    'mediafire', 'gdrive', 'gitclone', 'tts'
+    'mediafire', 'gdrive', 'gitclone', 'tts',
   ],
   SEARCH: [
     'define', 'wiki', 'cuaca', 'wthr', 'praytime', 'surah',
-    'npm', 'fakta', 'motivasi'
+    'npm', 'fakta', 'motivasi',
   ],
   ANIME: [
-    'waifu', 'neko', 'megumin', 'shinobu', 'awoo', 'maid', 'anime'
+    'waifu', 'neko', 'megumin', 'shinobu', 'awoo', 'maid', 'anime',
   ],
   FUN: [
     'game', 'tebakkata', 'suit', 'mathgame', 'dice', 'coin',
@@ -80,39 +86,38 @@ const MENU_CATEGORIES = {
     'compatibility', 'ship', 'roast', 'compliment', 'pickup',
     'quote', 'joke', 'truth', 'dare', 'wyr', 'horoscope',
     'hug', 'pat', 'wave', 'smile', 'dance', 'highfive',
-    'wink', 'blush', 'happy', 'cry', 'sleep', 'think', 'poke'
+    'wink', 'blush', 'happy', 'cry', 'sleep', 'think', 'poke',
   ],
   GROUP: [
     'tagall', 'hidetag', 'everyone', 'kick', 'add', 'promote',
     'demote', 'mute', 'unmute', 'link', 'revoke', 'ginfo',
     'updategname', 'updategdesc', 'poll', 'delete', 'antilink',
-    'antitoxic', 'welcome', 'leave'
+    'antitoxic', 'welcome', 'leave',
   ],
   LOGO: [
     'font', 'fancy', 'font1', 'font2', 'font3', 'font4', 'font5',
     'font6', 'font7', 'font8', 'font9', 'font10', 'logo', 'neon',
-    'gold', 'galaxy', 'glitch', 'matrix', 'graffiti', 'thunder'
+    'gold', 'galaxy', 'glitch', 'matrix', 'graffiti', 'thunder',
   ],
   TOOLS: [
     'hitung', 'catat', 'catatan', 'terjemah', 'translate', 'id',
     'getpp', 'getbio', 'gpass', 'qr', 'shorturl', 'vv', 'rvo',
-    'waktu', 'sticker', 'attp'
+    'waktu', 'sticker', 'attp',
   ],
   OWNER: [
     'setnama', 'setname', 'botname', 'updatebio', 'block',
     'unblock', 'blocklist', 'autoread', 'autotyping', 'mode',
-    'badwords', 'addkata', 'delkata', 'clean'
-  ]
+    'badwords', 'addkata', 'delkata', 'clean',
+  ],
 };
 
 const ALL_COMMANDS_SET = new Set(Object.values(MENU_CATEGORIES).flat());
 
-// Pengubah teks ke huruf Small Caps rapi untuk tampilan menu
 function toSmallCaps(str) {
   const map = {
     a: 'ᴀ', b: 'ʙ', c: 'ᴄ', d: 'ᴅ', e: 'ᴇ', f: 'ғ', g: 'ɢ', h: 'ʜ', i: 'ɪ',
     j: 'ᴊ', k: 'ᴋ', l: 'ʟ', m: 'ᴍ', n: 'ɴ', o: 'ᴏ', p: 'ᴘ', q: 'ǫ', r: 'ʀ',
-    s: 's', t: 'ᴛ', u: 'ᴜ', v: 'ᴠ', w: 'ᴡ', x: 'x', y: 'ʏ', z: 'ᴢ'
+    s: 's', t: 'ᴛ', u: 'ᴜ', v: 'ᴠ', w: 'ᴡ', x: 'x', y: 'ʏ', z: 'ᴢ',
   };
   return str.toLowerCase().split('').map((c) => map[c] || c).join('');
 }
@@ -134,17 +139,22 @@ function getTodayDateString() {
   return new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Jakarta' });
 }
 
+function extractUrl(text) {
+  const match = text.match(/https?:\/\/[^\s]+/i);
+  return match ? match[0].replace(/[.,!?)]+$/, '') : null;
+}
+
 // ============================================================
 // 3. SISTEM MEMORI PERMANEN, PENGATURAN & AUTO-UPDATE
 // ============================================================
 let dbMemory = {
-  version: 2.0,
+  version: 2.1,
   lastUpdateDate: '',
   updateLogs: [],
   users: {},
   learnedWords: [],
   notes: {},
-  groupSettings: {}, // { jid: { antilink: true, antitoxic: true, welcome: false } }
+  groupSettings: {},
   botSettings: {
     mode: 'public',
     autoread: false,
@@ -188,13 +198,13 @@ async function jalankanAutoUpdate(paksaManual = false) {
   const kataFilterBaru = [
     'asu', 'kampret', 'sialan', 'keparat', 'pecundang',
     'penipu', 'scam', 'idiot', 'sampah', 'bejat',
-    'laknat', 'kurangajar', 'gacor', 'maxwin', 'togel'
+    'laknat', 'kurangajar', 'gacor', 'maxwin', 'togel',
   ];
   kataFilterBaru.forEach((k) => {
     if (!dbMemory.learnedWords.includes(k)) dbMemory.learnedWords.push(k);
   });
 
-  const pesanLog = `v${dbMemory.version} (${hariIni}): Pembaruan database keamanan (+15 filter) & optimasi respon AI.`;
+  const pesanLog = `v${dbMemory.version} (${hariIni}): Pembaruan multi-server downloader & +15 filter proteksi.`;
   dbMemory.updateLogs.unshift(pesanLog);
   if (dbMemory.updateLogs.length > 10) dbMemory.updateLogs.pop();
 
@@ -243,29 +253,156 @@ function getGroupConfig(jid) {
 }
 
 // ============================================================
-// 4. HELPER FONT UNICODE & PAIRING OTP
+// 4. MULTI-SERVER DOWNLOADER ENGINE (ANTI GAGAL SERVER)
+// ============================================================
+async function fetchWithTimeout(url, options = {}, timeoutMs = 15000) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetch(url, {
+      ...options,
+      headers: { ...DEFAULT_HEADERS, ...(options.headers || {}) },
+      signal: controller.signal,
+    });
+    clearTimeout(timer);
+    return res;
+  } catch (err) {
+    clearTimeout(timer);
+    throw err;
+  }
+}
+
+async function downloadTikTok(url) {
+  // Server 1: TikWM POST HD
+  try {
+    const res = await fetchWithTimeout(
+      'https://www.tikwm.com/api/',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8' },
+        body: new URLSearchParams({ url, hd: '1' }),
+      },
+      15000
+    );
+    const json = await res.json();
+    if (json.code === 0 && json.data) {
+      let videoUrl = json.data.hdplay || json.data.play;
+      let musicUrl = json.data.music;
+      if (videoUrl && videoUrl.startsWith('/')) videoUrl = `https://www.tikwm.com${videoUrl}`;
+      if (musicUrl && musicUrl.startsWith('/')) musicUrl = `https://www.tikwm.com${musicUrl}`;
+      if (videoUrl) {
+        return { videoUrl, musicUrl, title: json.data.title || 'Video TikTok HD' };
+      }
+    }
+  } catch (e) {
+    console.log('⚠️ TikTok Server 1 beralih ke Server 2:', e.message);
+  }
+
+  // Server 2: TiklyDown API
+  try {
+    const res = await fetchWithTimeout(`https://api.tiklydown.eu.org/api/download?url=${encodeURIComponent(url)}`, {}, 15000);
+    const json = await res.json();
+    const videoUrl = json?.video?.noWatermark || json?.video?.watermark;
+    const musicUrl = json?.music?.play_url;
+    if (videoUrl) {
+      return { videoUrl, musicUrl, title: json?.title || 'Video TikTok HD' };
+    }
+  } catch (e) {
+    console.log('⚠️ TikTok Server 2 beralih ke Server 3:', e.message);
+  }
+
+  // Server 3: Siputzx TikTok API
+  try {
+    const res = await fetchWithTimeout(`https://api.siputzx.my.id/api/d/tiktok?url=${encodeURIComponent(url)}`, {}, 15000);
+    const json = await res.json();
+    const videoUrl = json?.data?.urls?.[0] || json?.data?.video || json?.result?.video;
+    const musicUrl = json?.data?.audio || json?.result?.audio;
+    if (videoUrl) {
+      return { videoUrl, musicUrl, title: json?.data?.title || 'Video TikTok HD' };
+    }
+  } catch (e) {
+    console.log('⚠️ TikTok Server 3 gagal:', e.message);
+  }
+
+  return null;
+}
+
+async function downloadYouTube(url, isAudio = false) {
+  const type = isAudio ? 'ytmp3' : 'ytmp4';
+
+  // Server 1: Siputzx YouTube API
+  try {
+    const res = await fetchWithTimeout(`https://api.siputzx.my.id/api/d/${type}?url=${encodeURIComponent(url)}`, {}, 18000);
+    const json = await res.json();
+    const dlUrl = json?.data?.dl || json?.data?.url || json?.result?.url;
+    if (dlUrl) {
+      return { url: dlUrl, title: json?.data?.title || 'Media YouTube HD' };
+    }
+  } catch (e) {
+    console.log('⚠️ YouTube Server 1 beralih ke Server 2:', e.message);
+  }
+
+  // Server 2: Agatz YouTube API
+  try {
+    const res = await fetchWithTimeout(`https://api.agatz.xyz/api/${type}?url=${encodeURIComponent(url)}`, {}, 18000);
+    const json = await res.json();
+    const dlUrl = json?.data?.downloadUrl || json?.data?.url || json?.result?.downloadUrl;
+    if (dlUrl) {
+      return { url: dlUrl, title: json?.data?.title || 'Media YouTube HD' };
+    }
+  } catch (e) {
+    console.log('⚠️ YouTube Server 2 beralih ke Server 3:', e.message);
+  }
+
+  // Server 3: Vreden YouTube API
+  try {
+    const res = await fetchWithTimeout(`https://api.vreden.web.id/api/${type}?url=${encodeURIComponent(url)}`, {}, 18000);
+    const json = await res.json();
+    const dlUrl = json?.result?.download?.url;
+    if (dlUrl) {
+      return { url: dlUrl, title: json?.result?.title || 'Media YouTube HD' };
+    }
+  } catch (e) {
+    console.log('⚠️ YouTube Server 3 gagal:', e.message);
+  }
+
+  return null;
+}
+
+async function downloadSocialMedia(url) {
+  // Server 1: Siputzx All-in-One Downloader
+  try {
+    const res = await fetchWithTimeout(`https://api.siputzx.my.id/api/d/aio?url=${encodeURIComponent(url)}`, {}, 15000);
+    const json = await res.json();
+    const dlUrl = json?.data?.url || json?.data?.medias?.[0]?.url || json?.result?.url;
+    if (dlUrl) return dlUrl;
+  } catch {}
+
+  // Server 2: Vreden Download API
+  try {
+    const res = await fetchWithTimeout(`https://api.vreden.web.id/api/download?url=${encodeURIComponent(url)}`, {}, 15000);
+    const json = await res.json();
+    const dlUrl = json?.result?.url || json?.result?.download || json?.data?.url;
+    if (dlUrl) return dlUrl;
+  } catch {}
+
+  return null;
+}
+
+// ============================================================
+// 5. HELPER FONT UNICODE & PAIRING OTP
 // ============================================================
 const FONT_MAPS = [
-  // 1: Small Caps
   { a:'ᴀ',b:'ʙ',c:'ᴄ',d:'ᴅ',e:'ᴇ',f:'ғ',g:'ɢ',h:'ʜ',i:'ɪ',j:'ᴊ',k:'ᴋ',l:'ʟ',m:'ᴍ',n:'ɴ',o:'ᴏ',p:'ᴘ',q:'ǫ',r:'ʀ',s:'s',t:'ᴛ',u:'ᴜ',v:'ᴠ',w:'ᴡ',x:'x',y:'ʏ',z:'ᴢ' },
-  // 2: Bold Sans
   { a:'𝗮',b:'𝗯',c:'𝗰',d:'𝗱',e:'𝗲',f:'𝗳',g:'𝗴',h:'𝗵',i:'𝗶',j:'𝗷',k:'𝗸',l:'𝗹',m:'𝗺',n:'𝗻',o:'𝗼',p:'𝗽',q:'𝗾',r:'𝗿',s:'𝘀',t:'𝘁',u:'𝘂',v:'𝘃',w:'𝘄',x:'𝘅',y:'𝘆',z:'𝘇',A:'𝗔',B:'𝗕',C:'𝗖',D:'𝗗',E:'𝗘',F:'𝗙',G:'𝗚',H:'𝗛',I:'𝗜',J:'𝗝',K:'𝗞',L:'𝗟',M:'𝗠',N:'𝗡',O:'𝗢',P:'𝗣',Q:'𝗤',R:'𝗥',S:'𝗦',T:'𝗧',U:'𝗨',V:'𝗩',W:'𝗪',X:'𝗫',Y:'𝗬',Z:'𝗭' },
-  // 3: Italic Sans
   { a:'𝘢',b:'𝘣',c:'𝘤',d:'𝘥',e:'𝘦',f:'𝘧',g:'𝘨',h:'𝘩',i:'𝘪',j:'𝘫',k:'𝘬',l:'𝘭',m:'𝘮',n:'𝘯',o:'𝘰',p:'𝘱',q:'𝘲',r:'𝘳',s:'𝘴',t:'𝘵',u:'𝘶',v:'𝘷',w:'𝘸',x:'𝘹',y:'𝘺',z:'𝘻',A:'𝘈',B:'𝘉',C:'𝘊',D:'𝘋',E:'𝘌',F:'𝘍',G:'𝘎',H:'𝘏',I:'𝘐',J:'𝘑',K:'𝘒',L:'𝘓',M:'𝘔',N:'𝘕',O:'𝘖',P:'𝘗',Q:'𝘘',R:'𝘙',S:'𝘚',T:'𝘛',U:'𝘜',V:'𝘝',W:'𝘞',X:'𝘟',Y:'𝘠',Z:'𝘡' },
-  // 4: Monospace
   { a:'𝚊',b:'𝚋',c:'𝚌',d:'𝚍',e:'𝚎',f:'𝚏',g:'𝚐',h:'𝚑',i:'𝚒',j:'𝚓',k:'𝚔',l:'𝚕',m:'𝚖',n:'𝚗',o:'𝚘',p:'𝚙',q:'𝚚',r:'𝚛',s:'𝚜',t:'𝚝',u:'𝚞',v:'𝚟',w:'𝚠',x:'𝚡',y:'𝚢',z:'𝚣',A:'𝙰',B:'𝙱',C:'𝙲',D:'𝙳',E:'𝙴',F:'𝙵',G:'𝙶',H:'𝙷',I:'𝙸',J:'𝙹',K:'𝙺',L:'𝙻',M:'𝙼',N:'𝙽',O:'𝙾',P:'𝙿',Q:'𝚀',R:'𝚁',S:'𝚂',T:'𝚃',U:'𝚄',V:'𝚅',W:'𝚆',X:'𝚇',Y:'𝚈',Z:'𝚉' },
-  // 5: Circled / Bubble
   { a:'ⓐ',b:'ⓑ',c:'ⓒ',d:'ⓓ',e:'ⓔ',f:'ⓕ',g:'ⓖ',h:'ⓗ',i:'ⓘ',j:'ⓙ',k:'ⓚ',l:'ⓛ',m:'ⓜ',n:'ⓝ',o:'ⓞ',p:'ⓟ',q:'ⓠ',r:'ⓡ',s:'ⓢ',t:'ⓣ',u:'ⓤ',v:'ⓥ',w:'ⓦ',x:'ⓧ',y:'ⓨ',z:'ⓩ',A:'Ⓐ',B:'Ⓑ',C:'Ⓒ',D:'Ⓓ',E:'Ⓔ',F:'Ⓕ',G:'Ⓖ',H:'Ⓗ',I:'Ⓘ',J:'Ⓙ',K:'Ⓚ',L:'Ⓛ',M:'Ⓜ',N:'Ⓝ',O:'Ⓞ',P:'Ⓟ',Q:'Ⓠ',R:'Ⓡ',S:'Ⓢ',T:'Ⓣ',U:'Ⓤ',V:'Ⓥ',W:'Ⓦ',X:'Ⓧ',Y:'Ⓨ',Z:'Ⓩ' },
-  // 6: Double-Struck
   { a:'𝕒',b:'𝕓',c:'𝕔',d:'𝕕',e:'𝕖',f:'𝕗',g:'𝕘',h:'𝕙',i:'𝕚',j:'𝕛',k:'𝕜',l:'𝕝',m:'𝕞',n:'𝕟',o:'𝕠',p:'𝕡',q:'𝕢',r:'𝕣',s:'𝕤',t:'𝕥',u:'𝕦',v:'𝕧',w:'𝕨',x:'𝕩',y:'𝕪',z:'𝕫',A:'𝔸',B:'𝔹',C:'ℂ',D:'𝔻',E:'𝔼',F:'𝔽',G:'𝔾',H:'ℍ',I:'𝕀',J:'𝕁',K:'𝕂',L:'𝕃',M:'𝕄',N:'ℕ',O:'𝕆',P:'ℙ',Q:'ℚ',R:'ℝ',S:'𝕊',T:'𝕋',U:'𝕌',V:'𝕍',W:'𝕎',X:'𝕏',Y:'𝕐',Z:'ℤ' },
-  // 7: Script
   { a:'𝒶',b:'𝒷',c:'𝒸',d:'𝒹',e:'ℯ',f:'𝒻',g:'ℊ',h:'𝒽',i:'𝒾',j:'𝒿',k:'𝓀',l:'𝓁',m:'𝓂',n:'𝓃',o:'ℴ',p:'𝓅',q:'𝓆',r:'𝓇',s:'𝓈',t:'𝓉',u:'𝓊',v:'𝓋',w:'𝓌',x:'𝓍',y:'𝓎',z:'𝓏',A:'𝒜',B:'ℬ',C:'𝒞',D:'𝒟',E:'ℰ',F:'ℱ',G:'𝒢',H:'ℋ',I:'ℐ',J:'𝒥',K:'𝒦',L:'ℒ',M:'ℳ',N:'𝒩',O:'𝒪',P:'𝒫',Q:'𝒬',R:'ℛ',S:'𝒮',T:'𝒯',U:'𝒰',V:'𝒱',W:'𝒲',X:'𝒳',Y:'𝒴',Z:'𝒵' },
-  // 8: Fraktur
   { a:'𝔞',b:'𝔟',c:'𝔠',d:'𝔡',e:'𝔢',f:'𝔣',g:'𝔤',h:'𝔥',i:'𝔦',j:'𝔧',k:'𝔨',l:'𝔩',m:'𝔪',n:'𝔫',o:'𝔬',p:'𝔭',q:'𝔮',r:'𝔯',s:'𝔰',t:'𝔱',u:'𝔲',v:'𝔳',w:'𝔴',x:'𝔵',y:'𝔶',z:'𝔷',A:'𝔄',B:'𝔅',C:'ℭ',D:'𝔇',E:'𝔈',F:'𝔉',G:'𝔊',H:'ℌ',I:'ℑ',J:'𝔍',K:'𝔎',L:'𝔏',M:'𝔐',N:'𝔑',O:'𝔒',P:'𝔓',Q:'𝔔',R:'ℜ',S:'𝔖',T:'𝔗',U:'𝔘',V:'𝔙',W:'𝔚',X:'𝔛',Y:'𝔜',Z:'ℨ' },
-  // 9: Squared
   { a:'🄰',b:'🄱',c:'🄲',d:'🄳',e:'🄴',f:'🄵',g:'🄶',h:'🄷',i:'🄸',j:'🄹',k:'🄺',l:'🄻',m:'🄼',n:'🄽',o:'🄾',p:'🄿',q:'🅀',r:'🅁',s:'🅂',t:'🅃',u:'🅄',v:'🅅',w:'🅆',x:'🅇',y:'🅈',z:'🅉',A:'🄰',B:'🄱',C:'🄲',D:'🄳',E:'🄴',F:'🄵',G:'🄶',H:'🄷',I:'🄸',J:'🄹',K:'🄺',L:'🄻',M:'🄼',N:'🄽',O:'🄾',P:'🄿',Q:'🅀',R:'🅁',S:'🅂',T:'🅃',U:'🅄',V:'🅅',W:'🅆',X:'🅇',Y:'🅈',Z:'🅉' },
-  // 10: Negative Squared
-  { a:'🅰',b:'🅱',c:'🅲',d:'🅳',e:'🅴',f:'🅵',g:'🅶',h:'🅷',i:'🅸',j:'🅹',k:'🅺',l:'🅻',m:'🅼',n:'🅽',o:'🅾',p:'🅿',q:'🆀',r:'🆁',s:'🆂',t:'🆃',u:'🆄',v:'🆅',w:'🆆',x:'🆇',y:'🆈',z:'🆉',A:'🅰',B:'🅱',C:'🅲',D:'🅳',E:'🅴',F:'🅵',G:'🅶',H:'🅷',I:'🅸',J:'🅹',K:'🅺',L:'🅻',M:'🅼',N:'🅽',O:'🅾',P:'🅿',Q:'🆀',R:'🆁',S:'🆂',T:'🆃',U:'🆄',V:'🆅',W:'🆆',X:'🆇',Y:'🆈',Z:'🆉' }
+  { a:'🅰',b:'🅱',c:'🅲',d:'🅳',e:'🅴',f:'🅵',g:'🅶',h:'🅷',i:'🅸',j:'🅹',k:'🅺',l:'🅻',m:'🅼',n:'🅽',o:'🅾',p:'🅿',q:'🆀',r:'🆁',s:'🆂',t:'🆃',u:'🆄',v:'🆅',w:'🆆',x:'🆇',y:'🆈',z:'🆉',A:'🅰',B:'🅱',C:'🅲',D:'🅳',E:'🅴',F:'🅵',G:'🅶',H:'🅷',I:'🅸',J:'🅹',K:'🅺',L:'🅻',M:'🅼',N:'🅽',O:'🅾',P:'🅿',Q:'🆀',R:'🆁',S:'🆂',T:'🆃',U:'🆄',V:'🆅',W:'🆆',X:'🆇',Y:'🆈',Z:'🆉' },
 ];
 
 function applyFont(text, index) {
@@ -286,51 +423,46 @@ async function mintaKodePairing(sock, phone) {
 }
 
 // ============================================================
-// 5. MESIN AI CERDAS, RINGKAS, DETAIL & AKURAT
+// 6. MESIN AI CERDAS, RINGKAS, DETAIL & AKURAT
 // ============================================================
 async function panggilServerAI(messagesPayload) {
   if (GEMINI_API_KEY) {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 15000);
     try {
       const promptGabungan = messagesPayload
         .map((m) => `${m.role === 'system' ? 'Instruksi' : m.role}: ${m.content}`)
         .join('\n\n');
-      const res = await fetch(
+      const res = await fetchWithTimeout(
         `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_API_KEY}`,
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ contents: [{ parts: [{ text: promptGabungan }] }] }),
-          signal: controller.signal,
-        }
+        },
+        15000
       );
-      clearTimeout(timer);
       if (res.ok) {
         const data = await res.json();
         const jawaban = data?.candidates?.[0]?.content?.parts?.[0]?.text;
         if (jawaban && jawaban.trim()) return jawaban.trim();
       }
-    } catch {
-      clearTimeout(timer);
-    }
+    } catch {}
   }
 
   for (let percobaan = 1; percobaan <= 2; percobaan++) {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 15000);
     try {
-      const res = await fetch('https://text.pollinations.ai/', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          messages: messagesPayload,
-          model: 'openai',
-          seed: Math.floor(Math.random() * 10000),
-        }),
-        signal: controller.signal,
-      });
-      clearTimeout(timer);
+      const res = await fetchWithTimeout(
+        'https://text.pollinations.ai/',
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            messages: messagesPayload,
+            model: 'openai',
+            seed: Math.floor(Math.random() * 10000),
+          }),
+        },
+        15000
+      );
 
       if (res.ok) {
         const text = await res.text();
@@ -338,9 +470,7 @@ async function panggilServerAI(messagesPayload) {
           return text.trim();
         }
       }
-    } catch {
-      clearTimeout(timer);
-    }
+    } catch {}
   }
 
   return null;
@@ -353,7 +483,9 @@ async function getSmartAIResponse(prompt, senderJid, senderName, specialty = 'ge
       ? `Fakta yang kamu ingat tentang ${senderName}: ${userData.facts.join('; ')}.`
       : `Lawan bicaramu bernama ${senderName}.`;
 
-  let roleDesc = 'Kamu adalah asisten AI WhatsApp cerdas bernama ' + (bot.userName || 'NEXA-AI BOT') + '. Jawab dengan cepat, ringkas, detail, terstruktur, dan mudah dipahami dalam Bahasa Indonesia yang ramah.';
+  let roleDesc =
+    `Kamu adalah asisten AI WhatsApp cerdas bernama ${bot.userName || 'NEXA-AI BOT'}. ` +
+    `Jawab setiap pertanyaan dengan cepat, ringkas, detail, terstruktur, dan mudah dipahami dalam Bahasa Indonesia yang ramah.`;
   if (specialty === 'coder') roleDesc += ' Fokus sebagai ahli pemrograman dan debugging kode yang bersih.';
   if (specialty === 'math') roleDesc += ' Fokus sebagai tutor matematika yang menjelaskan langkah demi langkah dengan akurat.';
   if (specialty === 'grammar') roleDesc += ' Fokus memperbaiki tata bahasa (grammar) dan ejaan teks dengan jelas.';
@@ -378,12 +510,11 @@ async function getSmartAIResponse(prompt, senderJid, senderName, specialty = 'ge
 }
 
 // ============================================================
-// 6. HANDLER UTAMA PESAN, MENU, DOWNLOADER, GRUP & TOOLS
+// 7. HANDLER UTAMA PESAN, MENU, DOWNLOADER, GRUP & TOOLS
 // ============================================================
-const gameSessions = new Map(); // { jid: { type: 'angka'|'kata'|'math', answer: any } }
+const gameSessions = new Map();
 
 function pasangPenjawab(sock) {
-  // Sambutan anggota baru jika fitur welcome grup diaktifkan
   sock.ev.on('group-participants.update', async ({ id, participants, action }) => {
     const gCfg = getGroupConfig(id);
     if (action === 'add' && gCfg.welcome) {
@@ -412,7 +543,6 @@ function pasangPenjawab(sock) {
       const senderParticipant = msg.key.participant || jid;
       const pushName = msg.pushName || 'Teman';
 
-      // Mode Self (Hanya nomor bot/owner yang bisa akses jika mode = self)
       if (dbMemory.botSettings.mode === 'self' && !senderParticipant.includes(PHONE)) {
         continue;
       }
@@ -461,50 +591,53 @@ function pasangPenjawab(sock) {
       // ----------------------------------------------------
       // 📥 2. DOWNLOADER OTOMATIS LINK TIKTOK & YOUTUBE (TANPA PERINTAH)
       // ----------------------------------------------------
-      if (/^https?:\/\/(www\.|vm\.|vt\.)?tiktok\.com\//i.test(rawText)) {
+      const detectedUrl = extractUrl(rawText);
+      const firstWord = rawText.replace(/^[.!/#]/, '').split(/\s+/)[0].toLowerCase();
+
+      // Jika pesan mengandung link TikTok dan bukan perintah eksplisit 'ttmp3'
+      if (detectedUrl && /tiktok\.com/i.test(detectedUrl) && firstWord !== 'ttmp3') {
         await sock.sendPresenceUpdate('composing', jid);
         await sock.sendMessage(jid, { text: '⏳ Mengunduh video TikTok HD tanpa watermark...' }, { quoted: msg });
-        try {
-          const apiRes = await fetch(`https://www.tikwm.com/api/?url=${encodeURIComponent(rawText)}`);
-          const json = await apiRes.json();
-          if (json.code === 0 && json.data) {
+        const hasilTT = await downloadTikTok(detectedUrl);
+        if (hasilTT?.videoUrl) {
+          try {
             await sock.sendMessage(
               jid,
               {
-                video: { url: json.data.hdplay || json.data.play },
-                caption: `🎬 *TikTok HD*\n${json.data.title || 'Berhasil diunduh'}`,
+                video: { url: hasilTT.videoUrl },
+                caption: `🎬 *TikTok HD*\n${hasilTT.title}`,
               },
               { quoted: msg }
             );
-          } else {
-            await sock.sendMessage(jid, { text: '❌ Video TikTok tidak ditemukan atau akun privat.' }, { quoted: msg });
+          } catch {
+            await sock.sendMessage(jid, { text: `✅ Video siap! Unduh langsung di sini:\n${hasilTT.videoUrl}` }, { quoted: msg });
           }
-        } catch {
-          await sock.sendMessage(jid, { text: '❌ Gagal terhubung ke server TikTok.' }, { quoted: msg });
+        } else {
+          await sock.sendMessage(jid, { text: '❌ Gagal mengunduh video TikTok. Pastikan video bersifat publik dan link valid.' }, { quoted: msg });
         }
         continue;
       }
 
-      if (/^https?:\/\/(www\.|m\.)?(youtube\.com\/(watch|shorts)|youtu\.be\/)/i.test(rawText)) {
+      // Jika pesan mengandung link YouTube dan bukan perintah eksplisit 'ytmp3'
+      if (detectedUrl && /(youtube\.com\/(watch|shorts)|youtu\.be\/)/i.test(detectedUrl) && firstWord !== 'ytmp3') {
         await sock.sendPresenceUpdate('composing', jid);
         await sock.sendMessage(jid, { text: '⏳ Memproses video YouTube HD...' }, { quoted: msg });
-        try {
-          const apiRes = await fetch(`https://api.vreden.web.id/api/ytmp4?url=${encodeURIComponent(rawText)}`);
-          const json = await apiRes.json();
-          if (json.result?.download?.url) {
+        const hasilYT = await downloadYouTube(detectedUrl, false);
+        if (hasilYT?.url) {
+          try {
             await sock.sendMessage(
               jid,
               {
-                video: { url: json.result.download.url },
-                caption: `🎬 *YouTube HD*\n${json.result.title || 'Berhasil diunduh'}`,
+                video: { url: hasilYT.url },
+                caption: `🎬 *YouTube HD*\n${hasilYT.title}`,
               },
               { quoted: msg }
             );
-          } else {
-            await sock.sendMessage(jid, { text: '❌ Video YouTube tidak dapat diunduh saat ini.' }, { quoted: msg });
+          } catch {
+            await sock.sendMessage(jid, { text: `✅ Video YouTube siap! Unduh langsung di sini:\n${hasilYT.url}` }, { quoted: msg });
           }
-        } catch {
-          await sock.sendMessage(jid, { text: '❌ Gagal terhubung ke server YouTube.' }, { quoted: msg });
+        } else {
+          await sock.sendMessage(jid, { text: '❌ Gagal mengunduh video YouTube. Coba link video lain atau durasi lebih pendek.' }, { quoted: msg });
         }
         continue;
       }
@@ -554,7 +687,6 @@ function pasangPenjawab(sock) {
       const cmd = args[0].toLowerCase();
       const param = args.slice(1).join(' ').trim();
 
-      // Pastikan hanya dieksekusi jika perintah memang terdaftar di menu
       if (ALL_COMMANDS_SET.has(cmd)) {
         if (dbMemory.botSettings.autotyping) {
           await sock.sendPresenceUpdate('composing', jid);
@@ -622,7 +754,6 @@ function pasangPenjawab(sock) {
           continue;
         }
 
-        // Sub-menu per kategori
         const subMenuMap = {
           aimenu: 'AI',
           downloadmenu: 'DOWNLOAD',
@@ -689,7 +820,7 @@ function pasangPenjawab(sock) {
             continue;
           }
           try {
-            const res = await fetch(`https://api.github.com/users/${encodeURIComponent(param)}`);
+            const res = await fetchWithTimeout(`https://api.github.com/users/${encodeURIComponent(param)}`);
             const u = await res.json();
             if (u.login) {
               await sock.sendMessage(
@@ -744,48 +875,50 @@ function pasangPenjawab(sock) {
 
         // === KATEGORI: DOWNLOAD ===
         if (cmd === 'tiktok' || cmd === 'tt' || cmd === 'ttmp3') {
-          if (!param.includes('tiktok.com')) {
-            await sock.sendMessage(jid, { text: `⚠️ Masukkan link TikTok.\nContoh: \`${cmd} https://vt.tiktok.com/xxxx\`` }, { quoted: msg });
+          const linkTT = extractUrl(param);
+          if (!linkTT || !/tiktok\.com/i.test(linkTT)) {
+            await sock.sendMessage(jid, { text: `⚠️ Masukkan link TikTok valid.\nContoh: \`${cmd} https://vt.tiktok.com/xxxx\`` }, { quoted: msg });
             continue;
           }
-          try {
-            const apiRes = await fetch(`https://www.tikwm.com/api/?url=${encodeURIComponent(param)}`);
-            const json = await apiRes.json();
-            if (json.code === 0 && json.data) {
-              if (cmd === 'ttmp3' && json.data.music) {
-                await sock.sendMessage(jid, { audio: { url: json.data.music }, mimetype: 'audio/mp4' }, { quoted: msg });
-              } else {
-                await sock.sendMessage(jid, { video: { url: json.data.hdplay || json.data.play }, caption: `🎬 *TikTok HD*\n${json.data.title || ''}` }, { quoted: msg });
+          await sock.sendMessage(jid, { text: '⏳ Memproses unduhan TikTok...' }, { quoted: msg });
+          const hasilTT = await downloadTikTok(linkTT);
+          if (hasilTT) {
+            try {
+              if (cmd === 'ttmp3' && hasilTT.musicUrl) {
+                await sock.sendMessage(jid, { audio: { url: hasilTT.musicUrl }, mimetype: 'audio/mp4' }, { quoted: msg });
+              } else if (hasilTT.videoUrl) {
+                await sock.sendMessage(jid, { video: { url: hasilTT.videoUrl }, caption: `🎬 *TikTok HD*\n${hasilTT.title}` }, { quoted: msg });
               }
-            } else {
-              await sock.sendMessage(jid, { text: '❌ Video TikTok tidak ditemukan.' }, { quoted: msg });
+            } catch {
+              await sock.sendMessage(jid, { text: `✅ Link unduhan siap:\n${cmd === 'ttmp3' ? hasilTT.musicUrl : hasilTT.videoUrl}` }, { quoted: msg });
             }
-          } catch {
-            await sock.sendMessage(jid, { text: '❌ Gagal memproses link TikTok.' }, { quoted: msg });
+          } else {
+            await sock.sendMessage(jid, { text: '❌ Video TikTok tidak ditemukan atau bersifat privat.' }, { quoted: msg });
           }
           continue;
         }
 
         if (['ytmp4', 'ytmp3', 'ytdl', 'video'].includes(cmd)) {
-          if (!param.includes('youtu')) {
-            await sock.sendMessage(jid, { text: `⚠️ Masukkan link YouTube.\nContoh: \`${cmd} https://youtu.be/xxxx\`` }, { quoted: msg });
+          const linkYT = extractUrl(param);
+          if (!linkYT || !/(youtube\.com|youtu\.be)/i.test(linkYT)) {
+            await sock.sendMessage(jid, { text: `⚠️ Masukkan link YouTube valid.\nContoh: \`${cmd} https://youtu.be/xxxx\`` }, { quoted: msg });
             continue;
           }
-          try {
-            const endpoint = cmd === 'ytmp3' ? 'ytmp3' : 'ytmp4';
-            const apiRes = await fetch(`https://api.vreden.web.id/api/${endpoint}?url=${encodeURIComponent(param)}`);
-            const json = await apiRes.json();
-            if (json.result?.download?.url) {
-              if (cmd === 'ytmp3') {
-                await sock.sendMessage(jid, { audio: { url: json.result.download.url }, mimetype: 'audio/mp4' }, { quoted: msg });
+          const isAudio = cmd === 'ytmp3';
+          await sock.sendMessage(jid, { text: `⏳ Memproses ${isAudio ? 'audio MP3' : 'video HD'} YouTube...` }, { quoted: msg });
+          const hasilYT = await downloadYouTube(linkYT, isAudio);
+          if (hasilYT?.url) {
+            try {
+              if (isAudio) {
+                await sock.sendMessage(jid, { audio: { url: hasilYT.url }, mimetype: 'audio/mp4' }, { quoted: msg });
               } else {
-                await sock.sendMessage(jid, { video: { url: json.result.download.url }, caption: `🎬 *YouTube HD*\n${json.result.title || ''}` }, { quoted: msg });
+                await sock.sendMessage(jid, { video: { url: hasilYT.url }, caption: `🎬 *YouTube HD*\n${hasilYT.title}` }, { quoted: msg });
               }
-            } else {
-              await sock.sendMessage(jid, { text: '❌ Media YouTube gagal diunduh.' }, { quoted: msg });
+            } catch {
+              await sock.sendMessage(jid, { text: `✅ File siap diunduh di sini:\n${hasilYT.url}` }, { quoted: msg });
             }
-          } catch {
-            await sock.sendMessage(jid, { text: '❌ Server downloader YouTube sedang sibuk.' }, { quoted: msg });
+          } else {
+            await sock.sendMessage(jid, { text: '❌ Media YouTube gagal diproses saat ini.' }, { quoted: msg });
           }
           continue;
         }
@@ -796,9 +929,9 @@ function pasangPenjawab(sock) {
             continue;
           }
           try {
-            const res = await fetch(`https://api.vreden.web.id/api/ytsearch?query=${encodeURIComponent(param)}`);
+            const res = await fetchWithTimeout(`https://api.siputzx.my.id/api/s/youtube?query=${encodeURIComponent(param)}`);
             const json = await res.json();
-            const list = (json.result || []).slice(0, 5);
+            const list = (json?.data || []).slice(0, 5);
             if (list.length > 0) {
               const hasil = list.map((v, i) => `${i + 1}. *${v.title}*\n   🔗 ${v.url}`).join('\n\n');
               await sock.sendMessage(jid, { text: `🔎 *Hasil Pencarian YouTube:*\n\n${hasil}\n\n_Kirim link di atas untuk langsung mengunduh video._` }, { quoted: msg });
@@ -812,27 +945,27 @@ function pasangPenjawab(sock) {
         }
 
         if (['igdl', 'fb', 'twitter', 'capcut', 'mediafire', 'gdrive'].includes(cmd)) {
-          if (!param.startsWith('http')) {
+          const linkSosmed = extractUrl(param);
+          if (!linkSosmed) {
             await sock.sendMessage(jid, { text: `⚠️ Masukkan URL valid.\nContoh: \`${cmd} https://...\`` }, { quoted: msg });
             continue;
           }
-          try {
-            const res = await fetch(`https://api.vreden.web.id/api/download?url=${encodeURIComponent(param)}`);
-            const json = await res.json();
-            const dlUrl = json.result?.url || json.result?.download || json.data?.url;
-            if (dlUrl) {
-              await sock.sendMessage(jid, { document: { url: dlUrl }, fileName: `${cmd}_download.mp4`, mimetype: 'video/mp4' }, { quoted: msg });
-            } else {
-              await sock.sendMessage(jid, { text: '❌ Link tidak didukung atau bersifat privat.' }, { quoted: msg });
+          await sock.sendMessage(jid, { text: '⏳ Mengambil media dari tautan...' }, { quoted: msg });
+          const dlUrl = await downloadSocialMedia(linkSosmed);
+          if (dlUrl) {
+            try {
+              await sock.sendMessage(jid, { document: { url: dlUrl }, fileName: `${cmd}_media.mp4`, mimetype: 'video/mp4' }, { quoted: msg });
+            } catch {
+              await sock.sendMessage(jid, { text: `✅ Link unduhan siap:\n${dlUrl}` }, { quoted: msg });
             }
-          } catch {
-            await sock.sendMessage(jid, { text: '❌ Gagal mengunduh dari tautan tersebut.' }, { quoted: msg });
+          } else {
+            await sock.sendMessage(jid, { text: '❌ Tautan tidak didukung atau bersifat privat.' }, { quoted: msg });
           }
           continue;
         }
 
         if (cmd === 'gitclone') {
-          const match = param.match(/github\.com\/([^/]+)\/([^/]+)/i);
+          const match = param.match(/github\.com\/([^/]+)\/([^/\s]+)/i);
           if (!match) {
             await sock.sendMessage(jid, { text: '⚠️ Contoh: `gitclone https://github.com/user/repo`' }, { quoted: msg });
             continue;
@@ -860,7 +993,7 @@ function pasangPenjawab(sock) {
             continue;
           }
           try {
-            const res = await fetch(`https://id.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(param)}`);
+            const res = await fetchWithTimeout(`https://id.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(param)}`);
             const data = await res.json();
             if (data.extract) {
               await sock.sendMessage(jid, { text: `📚 *Wikipedia: ${data.title}*\n\n${data.extract}` }, { quoted: msg });
@@ -879,7 +1012,7 @@ function pasangPenjawab(sock) {
             continue;
           }
           try {
-            const res = await fetch(`https://api.dictionaryapi.dev/api/v2/entries/en/${encodeURIComponent(param)}`);
+            const res = await fetchWithTimeout(`https://api.dictionaryapi.dev/api/v2/entries/en/${encodeURIComponent(param)}`);
             const data = await res.json();
             const def = data?.[0]?.meanings?.[0]?.definitions?.[0]?.definition;
             if (def) {
@@ -896,7 +1029,7 @@ function pasangPenjawab(sock) {
         if (cmd === 'cuaca' || cmd === 'wthr') {
           const kota = param || 'Jakarta';
           try {
-            const res = await fetch(`https://wttr.in/${encodeURIComponent(kota)}?format=3`);
+            const res = await fetchWithTimeout(`https://wttr.in/${encodeURIComponent(kota)}?format=3`);
             const text = await res.text();
             await sock.sendMessage(jid, { text: `🌤️ *Info Cuaca:*\n${text.trim()}` }, { quoted: msg });
           } catch {
@@ -908,7 +1041,7 @@ function pasangPenjawab(sock) {
         if (cmd === 'praytime') {
           const kota = param || 'Jakarta';
           try {
-            const res = await fetch(`https://api.aladhan.com/v1/timingsByCity?city=${encodeURIComponent(kota)}&country=Indonesia&method=20`);
+            const res = await fetchWithTimeout(`https://api.aladhan.com/v1/timingsByCity?city=${encodeURIComponent(kota)}&country=Indonesia&method=20`);
             const json = await res.json();
             const t = json?.data?.timings;
             if (t) {
@@ -929,7 +1062,7 @@ function pasangPenjawab(sock) {
         if (cmd === 'surah') {
           const num = parseInt(param, 10) || 1;
           try {
-            const res = await fetch(`https://api.alquran.cloud/v1/surah/${num}/id.indonesian`);
+            const res = await fetchWithTimeout(`https://api.alquran.cloud/v1/surah/${num}/id.indonesian`);
             const json = await res.json();
             if (json.data) {
               const ayat = json.data.ayahs.slice(0, 7).map((a) => `${a.numberInSurah}. ${a.text}`).join('\n');
@@ -949,7 +1082,7 @@ function pasangPenjawab(sock) {
             continue;
           }
           try {
-            const res = await fetch(`https://registry.npmjs.org/${encodeURIComponent(param)}`);
+            const res = await fetchWithTimeout(`https://registry.npmjs.org/${encodeURIComponent(param)}`);
             const data = await res.json();
             if (data.name) {
               const latest = data['dist-tags']?.latest || '-';
@@ -987,7 +1120,7 @@ function pasangPenjawab(sock) {
             anime: 'waifu',
           };
           try {
-            const res = await fetch(`https://api.waifu.pics/sfw/${endpointMap[cmd]}`);
+            const res = await fetchWithTimeout(`https://api.waifu.pics/sfw/${endpointMap[cmd]}`);
             const json = await res.json();
             if (json.url) {
               await sock.sendMessage(jid, { image: { url: json.url }, caption: `✨ *Anime (${cmd.toUpperCase()})*` }, { quoted: msg });
@@ -1088,12 +1221,11 @@ function pasangPenjawab(sock) {
           continue;
         }
 
-        // Anime Reaction GIF/Image SFW
         const reactionList = ['hug', 'pat', 'wave', 'smile', 'dance', 'highfive', 'wink', 'blush', 'happy', 'cry', 'sleep', 'think', 'poke'];
         if (reactionList.includes(cmd)) {
           const apiAction = cmd === 'think' ? 'smug' : cmd;
           try {
-            const res = await fetch(`https://api.waifu.pics/sfw/${apiAction}`);
+            const res = await fetchWithTimeout(`https://api.waifu.pics/sfw/${apiAction}`);
             const json = await res.json();
             if (json.url) {
               await sock.sendMessage(jid, { image: { url: json.url }, caption: `*${pushName}* melakukan *${cmd}* ${param ? `ke ${param}` : ''}` }, { quoted: msg });
@@ -1111,136 +1243,141 @@ function pasangPenjawab(sock) {
             continue;
           }
 
-          const metadata = await sock.groupMetadata(jid);
-          const participants = metadata.participants.map((p) => p.id);
-          const gCfg = getGroupConfig(jid);
+          try {
+            const metadata = await sock.groupMetadata(jid);
+            const participants = metadata.participants.map((p) => p.id);
+            const gCfg = getGroupConfig(jid);
 
-          if (cmd === 'tagall' || cmd === 'everyone') {
-            const teksTag = `📢 *PENGUMUMAN GRUP*\n${param ? `Pesan: ${param}\n\n` : '\n'}` + participants.map((p) => `• @${p.split('@')[0]}`).join('\n');
-            await sock.sendMessage(jid, { text: teksTag, mentions: participants }, { quoted: msg });
-            continue;
-          }
-
-          if (cmd === 'hidetag') {
-            await sock.sendMessage(jid, { text: param || '📢 Perhatian semuanya!', mentions: participants });
-            continue;
-          }
-
-          if (cmd === 'ginfo') {
-            await sock.sendMessage(
-              jid,
-              {
-                text: `ℹ️ *INFO GRUP*\n• Nama: ${metadata.subject}\n• Anggota: ${participants.length}\n• Anti-Link: ${gCfg.antilink ? 'ON' : 'OFF'}\n• Anti-Toxic: ${gCfg.antitoxic ? 'ON' : 'OFF'}\n• Welcome: ${gCfg.welcome ? 'ON' : 'OFF'}`,
-              },
-              { quoted: msg }
-            );
-            continue;
-          }
-
-          if (cmd === 'link') {
-            const code = await sock.groupInviteCode(jid);
-            await sock.sendMessage(jid, { text: `🔗 *Link Undangan Grup:*\nhttps://chat.whatsapp.com/${code}` }, { quoted: msg });
-            continue;
-          }
-
-          if (cmd === 'revoke') {
-            await sock.groupRevokeInvite(jid);
-            await sock.sendMessage(jid, { text: '✅ Link undangan grup telah direset.' }, { quoted: msg });
-            continue;
-          }
-
-          if (cmd === 'mute') {
-            await sock.groupSettingUpdate(jid, 'announcement');
-            await sock.sendMessage(jid, { text: '🔒 Grup ditutup (hanya admin yang dapat mengirim pesan).' }, { quoted: msg });
-            continue;
-          }
-
-          if (cmd === 'unmute') {
-            await sock.groupSettingUpdate(jid, 'not_announcement');
-            await sock.sendMessage(jid, { text: '🔓 Grup dibuka (semua anggota dapat mengirim pesan).' }, { quoted: msg });
-            continue;
-          }
-
-          if (cmd === 'updategname') {
-            if (!param) continue;
-            await sock.groupUpdateSubject(jid, param);
-            await sock.sendMessage(jid, { text: `✅ Nama grup diubah menjadi: *${param}*` }, { quoted: msg });
-            continue;
-          }
-
-          if (cmd === 'updategdesc') {
-            if (!param) continue;
-            await sock.groupUpdateDescription(jid, param);
-            await sock.sendMessage(jid, { text: '✅ Deskripsi grup berhasil diperbarui.' }, { quoted: msg });
-            continue;
-          }
-
-          if (cmd === 'poll') {
-            const parts = param.split('|').map((s) => s.trim()).filter(Boolean);
-            if (parts.length < 3) {
-              await sock.sendMessage(jid, { text: '⚠️ Format: `poll Pertanyaan | Opsi 1 | Opsi 2`' }, { quoted: msg });
+            if (cmd === 'tagall' || cmd === 'everyone') {
+              const teksTag = `📢 *PENGUMUMAN GRUP*\n${param ? `Pesan: ${param}\n\n` : '\n'}` + participants.map((p) => `• @${p.split('@')[0]}`).join('\n');
+              await sock.sendMessage(jid, { text: teksTag, mentions: participants }, { quoted: msg });
               continue;
             }
-            await sock.sendMessage(jid, { poll: { name: parts[0], values: parts.slice(1), selectableCount: 1 } });
-            continue;
-          }
 
-          if (cmd === 'delete') {
-            const quotedKey = msg.message.extendedTextMessage?.contextInfo;
-            if (quotedKey?.stanzaId) {
-              await sock.sendMessage(jid, {
-                delete: {
-                  remoteJid: jid,
-                  fromMe: false,
-                  id: quotedKey.stanzaId,
-                  participant: quotedKey.participant,
+            if (cmd === 'hidetag') {
+              await sock.sendMessage(jid, { text: param || '📢 Perhatian semuanya!', mentions: participants });
+              continue;
+            }
+
+            if (cmd === 'ginfo') {
+              await sock.sendMessage(
+                jid,
+                {
+                  text: `ℹ️ *INFO GRUP*\n• Nama: ${metadata.subject}\n• Anggota: ${participants.length}\n• Anti-Link: ${gCfg.antilink ? 'ON' : 'OFF'}\n• Anti-Toxic: ${gCfg.antitoxic ? 'ON' : 'OFF'}\n• Welcome: ${gCfg.welcome ? 'ON' : 'OFF'}`,
                 },
-              });
-            } else {
-              await sock.sendMessage(jid, { text: '⚠️ Balas pesan yang ingin dihapus dengan mengetik `delete`.' }, { quoted: msg });
-            }
-            continue;
-          }
-
-          if (['kick', 'add', 'promote', 'demote'].includes(cmd)) {
-            const mentioned = msg.message.extendedTextMessage?.contextInfo?.mentionedJid || [];
-            const target = mentioned[0] || (param ? `${param.replace(/\D/g, '')}@s.whatsapp.net` : null);
-            if (!target) {
-              await sock.sendMessage(jid, { text: `⚠️ Tag pengguna atau masukkan nomor.\nContoh: \`${cmd} @user\`` }, { quoted: msg });
+                { quoted: msg }
+              );
               continue;
             }
-            const actionMap = { kick: 'remove', add: 'add', promote: 'promote', demote: 'demote' };
-            await sock.groupParticipantsUpdate(jid, [target], actionMap[cmd]);
-            await sock.sendMessage(jid, { text: `✅ Berhasil menjalankan *${cmd}* pada @${target.split('@')[0]}`, mentions: [target] }, { quoted: msg });
-            continue;
-          }
 
-          if (cmd === 'antilink') {
-            gCfg.antilink = !gCfg.antilink;
-            await saveMemory();
-            await sock.sendMessage(jid, { text: `🛡️ Anti-Link Grup sekarang: *${gCfg.antilink ? 'AKTIF' : 'NONAKTIF'}*` }, { quoted: msg });
-            continue;
-          }
+            if (cmd === 'link') {
+              const code = await sock.groupInviteCode(jid);
+              await sock.sendMessage(jid, { text: `🔗 *Link Undangan Grup:*\nhttps://chat.whatsapp.com/${code}` }, { quoted: msg });
+              continue;
+            }
 
-          if (cmd === 'antitoxic') {
-            gCfg.antitoxic = !gCfg.antitoxic;
-            await saveMemory();
-            await sock.sendMessage(jid, { text: `🛡️ Anti-Toxic Grup sekarang: *${gCfg.antitoxic ? 'AKTIF' : 'NONAKTIF'}*` }, { quoted: msg });
-            continue;
-          }
+            if (cmd === 'revoke') {
+              await sock.groupRevokeInvite(jid);
+              await sock.sendMessage(jid, { text: '✅ Link undangan grup telah direset.' }, { quoted: msg });
+              continue;
+            }
 
-          if (cmd === 'welcome') {
-            gCfg.welcome = !gCfg.welcome;
-            await saveMemory();
-            await sock.sendMessage(jid, { text: `👋 Pesan Welcome Grup sekarang: *${gCfg.welcome ? 'AKTIF' : 'NONAKTIF'}*` }, { quoted: msg });
-            continue;
-          }
+            if (cmd === 'mute') {
+              await sock.groupSettingUpdate(jid, 'announcement');
+              await sock.sendMessage(jid, { text: '🔒 Grup ditutup (hanya admin yang dapat mengirim pesan).' }, { quoted: msg });
+              continue;
+            }
 
-          if (cmd === 'leave') {
-            await sock.sendMessage(jid, { text: '👋 Bot pamit keluar dari grup. Terima kasih!' });
-            await sock.groupLeave(jid);
-            continue;
+            if (cmd === 'unmute') {
+              await sock.groupSettingUpdate(jid, 'not_announcement');
+              await sock.sendMessage(jid, { text: '🔓 Grup dibuka (semua anggota dapat mengirim pesan).' }, { quoted: msg });
+              continue;
+            }
+
+            if (cmd === 'updategname') {
+              if (!param) continue;
+              await sock.groupUpdateSubject(jid, param);
+              await sock.sendMessage(jid, { text: `✅ Nama grup diubah menjadi: *${param}*` }, { quoted: msg });
+              continue;
+            }
+
+            if (cmd === 'updategdesc') {
+              if (!param) continue;
+              await sock.groupUpdateDescription(jid, param);
+              await sock.sendMessage(jid, { text: '✅ Deskripsi grup berhasil diperbarui.' }, { quoted: msg });
+              continue;
+            }
+
+            if (cmd === 'poll') {
+              const parts = param.split('|').map((s) => s.trim()).filter(Boolean);
+              if (parts.length < 3) {
+                await sock.sendMessage(jid, { text: '⚠️ Format: `poll Pertanyaan | Opsi 1 | Opsi 2`' }, { quoted: msg });
+                continue;
+              }
+              await sock.sendMessage(jid, { poll: { name: parts[0], values: parts.slice(1), selectableCount: 1 } });
+              continue;
+            }
+
+            if (cmd === 'delete') {
+              const quotedKey = msg.message.extendedTextMessage?.contextInfo;
+              if (quotedKey?.stanzaId) {
+                await sock.sendMessage(jid, {
+                  delete: {
+                    remoteJid: jid,
+                    fromMe: false,
+                    id: quotedKey.stanzaId,
+                    participant: quotedKey.participant,
+                  },
+                });
+              } else {
+                await sock.sendMessage(jid, { text: '⚠️ Balas pesan yang ingin dihapus dengan mengetik `delete`.' }, { quoted: msg });
+              }
+              continue;
+            }
+
+            if (['kick', 'add', 'promote', 'demote'].includes(cmd)) {
+              const mentioned = msg.message.extendedTextMessage?.contextInfo?.mentionedJid || [];
+              const target = mentioned[0] || (param ? `${param.replace(/\D/g, '')}@s.whatsapp.net` : null);
+              if (!target) {
+                await sock.sendMessage(jid, { text: `⚠️ Tag pengguna atau masukkan nomor.\nContoh: \`${cmd} @user\`` }, { quoted: msg });
+                continue;
+              }
+              const actionMap = { kick: 'remove', add: 'add', promote: 'promote', demote: 'demote' };
+              await sock.groupParticipantsUpdate(jid, [target], actionMap[cmd]);
+              await sock.sendMessage(jid, { text: `✅ Berhasil menjalankan *${cmd}* pada @${target.split('@')[0]}`, mentions: [target] }, { quoted: msg });
+              continue;
+            }
+
+            if (cmd === 'antilink') {
+              gCfg.antilink = !gCfg.antilink;
+              await saveMemory();
+              await sock.sendMessage(jid, { text: `🛡️ Anti-Link Grup sekarang: *${gCfg.antilink ? 'AKTIF' : 'NONAKTIF'}*` }, { quoted: msg });
+              continue;
+            }
+
+            if (cmd === 'antitoxic') {
+              gCfg.antitoxic = !gCfg.antitoxic;
+              await saveMemory();
+              await sock.sendMessage(jid, { text: `🛡️ Anti-Toxic Grup sekarang: *${gCfg.antitoxic ? 'AKTIF' : 'NONAKTIF'}*` }, { quoted: msg });
+              continue;
+            }
+
+            if (cmd === 'welcome') {
+              gCfg.welcome = !gCfg.welcome;
+              await saveMemory();
+              await sock.sendMessage(jid, { text: `👋 Pesan Welcome Grup sekarang: *${gCfg.welcome ? 'AKTIF' : 'NONAKTIF'}*` }, { quoted: msg });
+              continue;
+            }
+
+            if (cmd === 'leave') {
+              await sock.sendMessage(jid, { text: '👋 Bot pamit keluar dari grup. Terima kasih!' });
+              await sock.groupLeave(jid);
+              continue;
+            }
+          } catch {
+            await sock.sendMessage(jid, { text: '⚠️ Gagal menjalankan perintah grup. Pastikan bot sudah menjadi Admin Grup.' }, { quoted: msg });
           }
+          continue;
         }
 
         // === KATEGORI: LOGO & FONT ===
@@ -1379,12 +1516,13 @@ function pasangPenjawab(sock) {
         }
 
         if (cmd === 'shorturl') {
-          if (!param.startsWith('http')) {
+          const linkShort = extractUrl(param);
+          if (!linkShort) {
             await sock.sendMessage(jid, { text: '⚠️ Contoh: `shorturl https://www.google.com`' }, { quoted: msg });
             continue;
           }
           try {
-            const res = await fetch(`https://tinyurl.com/api-create.php?url=${encodeURIComponent(param)}`);
+            const res = await fetchWithTimeout(`https://tinyurl.com/api-create.php?url=${encodeURIComponent(linkShort)}`);
             const short = await res.text();
             await sock.sendMessage(jid, { text: `🔗 *Short URL:*\n${short}` }, { quoted: msg });
           } catch {
@@ -1416,7 +1554,7 @@ function pasangPenjawab(sock) {
             await sock.sendMessage(jid, { text: '⚠️ Balas pesan sekali lihat (View Once) dengan mengetik `vv`.' }, { quoted: msg });
             continue;
           }
-          await sock.sendMessage(jid, { text: '✅ Pesan sekali lihat terdeteksi! Fitur ini hanya untuk arsip pribadi.' }, { quoted: msg });
+          await sock.sendMessage(jid, { text: '✅ Pesan sekali lihat terdeteksi.' }, { quoted: msg });
           continue;
         }
 
@@ -1537,7 +1675,7 @@ function pasangPenjawab(sock) {
 }
 
 // ============================================================
-// 7. WEB PANEL KONTROL 2 KOLOM
+// 8. WEB PANEL KONTROL 2 KOLOM
 // ============================================================
 function mulaiWeb() {
   const port = process.env.PORT || 3000;
@@ -1632,7 +1770,7 @@ function mulaiWeb() {
     <body>
       <div class="header">
         <h1>🚀 NEXA-AI BOT CONTROL PANEL</h1>
-        <p style="color:#94a3b8; margin:0;">Koneksi Multi-Nomor, Proteksi Grup & 190+ Perintah Aktif</p>
+        <p style="color:#94a3b8; margin:0;">Koneksi Multi-Nomor, Proteksi Grup & Multi-Server Downloader</p>
       </div>
 
       <div class="container">
@@ -1646,7 +1784,7 @@ function mulaiWeb() {
           <div class="stat-grid">
             <div class="stat-card">
               <div>Versi & Update</div>
-              <strong id="st-ver">v2.0</strong>
+              <strong id="st-ver">v2.1</strong>
             </div>
             <div class="stat-card">
               <div>Bot Uptime</div>
@@ -1688,7 +1826,7 @@ function mulaiWeb() {
               p1.innerHTML = \`
                 <div style="text-align:center; padding:30px 0;">
                   <span class="badge" style="background:#10b981;">✅ WA TERHUBUNG</span>
-                  <p style="margin-top:15px; color:#cbd5e1;">Bot aktif melayani \${d.totalCommands} fitur & proteksi grup.</p>
+                  <p style="margin-top:15px; color:#cbd5e1;">Bot aktif melayani \${d.totalCommands} fitur & downloader HD.</p>
                   <p style="font-size:0.95rem; color:#38bdf8;">Nomor Aktif: <b>\${d.userPhone}</b></p>
                 </div>\`;
             } else {
@@ -1759,7 +1897,7 @@ function mulaiWeb() {
 }
 
 // ============================================================
-// 8. PEMBERSIH 24 JAM & STARTUP UTAMA
+// 9. PEMBERSIH 24 JAM & STARTUP UTAMA
 // ============================================================
 function jalankanPembersihOtomatis24Jam() {
   setInterval(() => {
@@ -1797,7 +1935,7 @@ async function start() {
     version,
     auth: state,
     logger: pino({ level: 'silent' }),
-    browser: ['NEXA-AI Bot', 'Chrome', '2.0.0'],
+    browser: ['NEXA-AI Bot', 'Chrome', '2.1.0'],
     printQRInTerminal: false,
   });
 
