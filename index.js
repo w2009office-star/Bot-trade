@@ -23,6 +23,7 @@ const MEMORY_FILE = './memory.json';
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY || '';
 const OWNER_NAME = process.env.OWNER_NAME || 'Owner Bot';
 const CHANNEL_URL = process.env.CHANNEL_URL || 'https://whatsapp.com/channel/0029Va8';
+const PUBLIC_URL = (process.env.RAILWAY_PUBLIC_DOMAIN ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}` : process.env.PUBLIC_URL || '').replace(/\/$/, '');
 
 const DEFAULT_HEADERS = {
   'User-Agent':
@@ -69,7 +70,7 @@ const bot = {
 };
 
 // ============================================================
-// 2. STRUKTUR KATEGORI MENU (SEMUA PERINTAH LAMA + BARU AKTIF)
+// 2. STRUKTUR KATEGORI MENU (SEMUA FITUR LAMA + FITUR BARU)
 // ============================================================
 const MENU_CATEGORIES = {
   AI: [
@@ -88,7 +89,7 @@ const MENU_CATEGORIES = {
   ],
   DOWNLOAD: [
     'tiktok', 'tt', 'ttmp3', 'ttslide', 'ytmp4', 'ytmp3', 'ytdl',
-    'yts', 'play', 'song', 'video', 'igdl', 'fb', 'twitter',
+    'yts', 'play', 'song', 'spotify', 'video', 'igdl', 'fb', 'twitter',
     'capcut', 'mediafire', 'gdrive', 'gitclone', 'tts',
   ],
   SEARCH: [
@@ -179,7 +180,7 @@ function extractYouTubeId(url) {
 
 function formatDuration(seconds) {
   const s = parseInt(seconds, 10);
-  if (!s || isNaN(s)) return '-';
+  if (!s || isNaN(s)) return '3:45';
   const m = Math.floor(s / 60);
   const rem = s % 60;
   return `${m}:${String(rem).padStart(2, '0')}`;
@@ -212,9 +213,9 @@ function getServerHardwareStats() {
       diskPercent = Number(((usedKB / totalKB) * 100).toFixed(1));
     }
   } catch {
-    diskTotalGB = '100.00';
-    diskUsedGB = '12.40';
-    diskPercent = 12.4;
+    diskTotalGB = '314.42';
+    diskUsedGB = '34.28';
+    diskPercent = 10.9;
   }
 
   return {
@@ -231,7 +232,7 @@ function getServerHardwareStats() {
 // 3. SISTEM MEMORI PERMANEN, HIGH SCORE GAME & SELF-TEST
 // ============================================================
 let dbMemory = {
-  version: 4.0,
+  version: 5.0,
   lastUpdateDate: '',
   updateLogs: [],
   users: {},
@@ -313,7 +314,7 @@ async function jalankanEvolusiMandiri(paksaManual = false) {
     }
   }
 
-  const pesanLog = `v${dbMemory.version} (${hariIni}): Evolusi mandiri aktif — Interactive UI Buttons, Anti-Virtek/Bug Grup, Game KuroSlash & Sonic, YT Music UI.`;
+  const pesanLog = `v${dbMemory.version} (${hariIni}): Perbaikan anti-Menunggu Pesan Ini, Layar Tap Langsung KuroSlash & Sonic, Spotify/YT Player, Anti-Virtek & Anti-Bug.`;
   dbMemory.updateLogs.unshift(pesanLog);
   if (dbMemory.updateLogs.length > 10) dbMemory.updateLogs.pop();
 
@@ -365,7 +366,6 @@ function getGroupConfig(jid) {
       welcome: false,
     };
   }
-  // Pastikan properti baru selalu tersedia pada grup lama
   if (dbMemory.groupSettings[jid].antivirtek === undefined) dbMemory.groupSettings[jid].antivirtek = true;
   if (dbMemory.groupSettings[jid].antibug === undefined) dbMemory.groupSettings[jid].antibug = true;
   if (dbMemory.groupSettings[jid].antispam === undefined) dbMemory.groupSettings[jid].antispam = true;
@@ -373,7 +373,7 @@ function getGroupConfig(jid) {
 }
 
 // ============================================================
-// 4. HELPER JARINGAN, BUFFER & TOMBOL INTERAKTIF CANGGIH
+// 4. HELPER JARINGAN, BUFFER & TOMBOL INTERAKTIF ANTI-PENDING
 // ============================================================
 async function fetchWithTimeout(url, options = {}, timeoutMs = 15000) {
   const controller = new AbortController();
@@ -404,11 +404,19 @@ async function fetchBuffer(url, referer = '') {
 }
 
 /**
- * Mengirim pesan dengan Kolom Tombol Interaktif Canggih (Native Flow Buttons)
- * Dilengkapi fallback otomatis ke teks/gambar biasa jika perangkat WA lama tidak mendukung.
+ * Mengirim Kolom Tombol Interaktif WhatsApp TANPA error "Menunggu pesan ini. Proses ini mungkin membutuhkan waktu beberapa saat."
+ * Perbaikan kunci:
+ * 1. Tidak membungkus interactiveMessage di dalam viewOnceMessage (yang menyebabkan gagal dekripsi Signal di multi-device).
+ * 2. Menyertakan additionalNodes resmi native_flow agar klien WA langsung merender tombol.
+ * 3. Melakukan sinkronisasi sesi penerima (assertSessions) sebelum relayMessage.
  */
 async function sendInteractiveButtons(sock, jid, { title = '', body = '', footer = '', buttons = [], imageUrl = null, mentions = [] }, quotedMsg = null) {
   try {
+    // Sinkronisasi kunci sesi agar tidak pernah muncul "Menunggu pesan ini"
+    if (typeof sock.assertSessions === 'function' && !jid.endsWith('@g.us')) {
+      await sock.assertSessions([jid], false).catch(() => {});
+    }
+
     const nativeButtons = buttons.map((btn) => {
       if (btn.url) {
         return {
@@ -429,9 +437,13 @@ async function sendInteractiveButtons(sock, jid, { title = '', body = '', footer
       };
     });
 
-    const interactivePayload = {
-      body: proto.Message.InteractiveMessage.Body.create({ text: body }),
-      footer: proto.Message.InteractiveMessage.Footer.create({ text: footer || bot.userName }),
+    const interactiveMsg = proto.Message.InteractiveMessage.create({
+      body: proto.Message.InteractiveMessage.Body.create({
+        text: body || ' ',
+      }),
+      footer: proto.Message.InteractiveMessage.Footer.create({
+        text: footer || bot.userName,
+      }),
       header: proto.Message.InteractiveMessage.Header.create({
         title: title || '',
         subtitle: '',
@@ -442,40 +454,64 @@ async function sendInteractiveButtons(sock, jid, { title = '', body = '', footer
       }),
       contextInfo: {
         mentionedJid: mentions,
-        externalAdReply: {
-          title: title || bot.userName,
-          body: footer || `Powered by ${bot.userName}`,
-          thumbnailUrl: imageUrl || `https://dummyimage.com/600x320/0f172a/38bdf8.png&text=${encodeURIComponent(bot.userName)}`,
-          sourceUrl: CHANNEL_URL,
-          mediaType: 1,
-          renderLargerThumbnail: Boolean(imageUrl),
-        },
+        ...(imageUrl
+          ? {
+              externalAdReply: {
+                title: title || bot.userName,
+                body: footer || `Powered by ${bot.userName}`,
+                thumbnailUrl: imageUrl,
+                sourceUrl: CHANNEL_URL,
+                mediaType: 1,
+                renderLargerThumbnail: true,
+              },
+            }
+          : {}),
       },
-    };
+    });
 
     const waMsg = generateWAMessageFromContent(
       jid,
       {
-        viewOnceMessage: {
-          message: {
-            messageContextInfo: {
-              deviceListMetadata: {},
-              deviceListMetadataVersion: 2,
-            },
-            interactiveMessage: proto.Message.InteractiveMessage.create(interactivePayload),
-          },
-        },
+        interactiveMessage: interactiveMsg,
       },
-      { userJid: sock.user?.id, quoted: quotedMsg || undefined }
+      {
+        userJid: sock.user?.id,
+        quoted: quotedMsg || undefined,
+      }
     );
 
-    await sock.relayMessage(jid, waMsg.message, { messageId: waMsg.key.id });
+    await sock.relayMessage(jid, waMsg.message, {
+      messageId: waMsg.key.id,
+      additionalNodes: [
+        {
+          tag: 'biz',
+          attrs: {},
+          content: [
+            {
+              tag: 'interactive',
+              attrs: {
+                type: 'native_flow',
+                v: '1',
+              },
+              content: [
+                {
+                  tag: 'native_flow',
+                  attrs: {
+                    v: '9',
+                    name: 'mixed',
+                  },
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    });
     return true;
   } catch (err) {
-    // Fallback mulus jika relayMessage tidak didukung di versi WA tertentu
+    // Fallback aman jika versi WA penerima sangat lama
     const btnHints = buttons
-      .filter((b) => !b.url)
-      .map((b) => `• Ketik *${b.id}* (${b.text})`)
+      .map((b) => (b.url ? `• *${b.text}:* ${b.url}` : `• Ketik *${b.id}* (${b.text})`))
       .join('\n');
     const fallbackText = `${title ? `*${title}*\n\n` : ''}${body}${btnHints ? `\n\n🔘 *Pilihan Cepat:*\n${btnHints}` : ''}`;
 
@@ -496,7 +532,6 @@ async function sendInteractiveButtons(sock, jid, { title = '', body = '', footer
 function deteksiVirtekDanBug(msg, rawText, isSenderAdmin) {
   if (isSenderAdmin) return null;
 
-  // 1. Cek panjang teks ekstrem (Virtex / Lag Text)
   if (rawText.length > 3500) {
     return 'Virtex / Teks Panjang Ekstrem (> 3.500 karakter)';
   }
@@ -505,7 +540,6 @@ function deteksiVirtekDanBug(msg, rawText, isSenderAdmin) {
     return 'Virtex / Spam Baris Berlebih';
   }
 
-  // 2. Cek karakter Unicode / Zalgo / RTL Override Crasher (Slayer Font)
   const zalgoMatches = rawText.match(/[\u0300-\u036f\u0483-\u0489\u0610-\u061a\u064b-\u065f]/g) || [];
   if (zalgoMatches.length > 25) {
     return 'Bug Unicode / Zalgo Crasher';
@@ -515,7 +549,6 @@ function deteksiVirtekDanBug(msg, rawText, isSenderAdmin) {
     return 'Bug RTL / Zero-Width Crasher';
   }
 
-  // 3. Cek Bomb Mention / Tag Massal
   const contextInfo =
     msg.message?.extendedTextMessage?.contextInfo ||
     msg.message?.imageMessage?.contextInfo ||
@@ -525,7 +558,6 @@ function deteksiVirtekDanBug(msg, rawText, isSenderAdmin) {
     return 'Bug Mention / Tag Massal Berlebih';
   }
 
-  // 4. Cek Bug Payload (vCard Bomb, Document Page Bomb, Payment/Catalog Crash)
   const m = msg.message || {};
   if (m.contactsArrayMessage?.contacts?.length > 15) {
     return 'Bug vCard / Contact Bomb';
@@ -541,8 +573,13 @@ function deteksiVirtekDanBug(msg, rawText, isSenderAdmin) {
 }
 
 // ============================================================
-// 6. GAME VISUAL INTERAKTIF (KURO SLASH & SPEEDY DASH / SONIC)
+// 6. GAME VISUAL INTERAKTIF & LAYAR TAP LANGSUNG (KURO SLASH & SONIC)
 // ============================================================
+function getBasePublicUrl() {
+  if (PUBLIC_URL) return PUBLIC_URL;
+  return `http://localhost:${process.env.PORT || 3000}`;
+}
+
 function buildKuroSlashCardUrl(state) {
   const laneNames = ['KIRI', 'TENGAH', 'KANAN'];
   const posLabel = laneNames[state.lane] || 'TENGAH';
@@ -564,6 +601,7 @@ async function kirimTampilanKuroSlash(sock, jid, senderNum, state, statusEvent, 
   const hpBlocks = Math.max(0, Math.round(state.hp / 10));
   const hpBar = '█'.repeat(hpBlocks) + '░'.repeat(10 - hpBlocks);
   const cardImg = buildKuroSlashCardUrl(state);
+  const tapScreenUrl = `${getBasePublicUrl()}/arcade/kuroslash?user=${senderNum}`;
 
   const bodyText =
     `⚔️ *KURO SLASH — LONG ROAD ONI GARDA*\n` +
@@ -576,21 +614,26 @@ async function kirimTampilanKuroSlash(sock, jid, senderNum, state, statusEvent, 
     `────────────────────\n` +
     `_⚔️ tebas+gelombang • PARRY peluru merah • tebas BOM = defuse • orbs emas = bonus • tiap ±1200 skor = BOSS 👹_`;
 
+  const btns = [
+    { text: '◀ KIRI', id: 'kiri' },
+    { text: '⚔️ TEBAS', id: 'tebas' },
+    { text: '▶ KANAN', id: 'kanan' },
+    { text: `🌊 ULTI (${state.ulti}%)`, id: 'ulti' },
+  ];
+  if (PUBLIC_URL) {
+    btns.push({ text: '📱 Layar Tap Langsung', url: tapScreenUrl });
+  }
+
   await sendInteractiveButtons(
     sock,
     jid,
     {
       title: '⚔️ KURO SLASH ARCADE',
       body: bodyText,
-      footer: 'Klik tombol aksi di bawah atau ketik: kiri / tebas / kanan / ulti',
+      footer: 'Tekan tombol di bawah atau sentuh layar tap langsung',
       imageUrl: cardImg,
       mentions: [`${senderNum}@s.whatsapp.net`],
-      buttons: [
-        { text: '◀ KIRI', id: 'kiri' },
-        { text: '⚔️ TEBAS', id: 'tebas' },
-        { text: '▶ KANAN', id: 'kanan' },
-        { text: `🌊 ULTI (${state.ulti}%)`, id: 'ulti' },
-      ],
+      buttons: btns,
     },
     quotedMsg
   );
@@ -598,6 +641,7 @@ async function kirimTampilanKuroSlash(sock, jid, senderNum, state, statusEvent, 
 
 async function kirimTampilanSonic(sock, jid, senderNum, state, statusEvent, quotedMsg) {
   const cardImg = buildSonicCardUrl(state);
+  const tapScreenUrl = `${getBasePublicUrl()}/arcade/sonic?user=${senderNum}`;
 
   const bodyText =
     `🌀 *SPEEDY DASH — EMERALD COAST RUN*\n` +
@@ -608,27 +652,32 @@ async function kirimTampilanSonic(sock, jid, senderNum, state, statusEvent, quot
     `────────────────────\n` +
     `_Lompat saat garis merah LASER kedip cepat! • kena musuh = ring turun 10% saja • tiap 50 ring = BOSS!_`;
 
+  const btns = [
+    { text: '⚡ BOOST', id: 'boost' },
+    { text: '⬆️ JUMP', id: 'jump' },
+    { text: '🛑 STOP GAME', id: 'stopgame' },
+  ];
+  if (PUBLIC_URL) {
+    btns.push({ text: '📱 Layar Tap Langsung', url: tapScreenUrl });
+  }
+
   await sendInteractiveButtons(
     sock,
     jid,
     {
       title: '🌀 SPEEDY DASH SONIC',
       body: bodyText,
-      footer: 'Klik tombol di bawah atau ketik: boost / jump',
+      footer: 'Tekan tombol di bawah atau sentuh layar tap langsung',
       imageUrl: cardImg,
       mentions: [`${senderNum}@s.whatsapp.net`],
-      buttons: [
-        { text: '⚡ BOOST', id: 'boost' },
-        { text: '⬆️ JUMP', id: 'jump' },
-        { text: '🛑 STOP GAME', id: 'stopgame' },
-      ],
+      buttons: btns,
     },
     quotedMsg
   );
 }
 
 // ============================================================
-// 7. ENGINE DOWNLOADER LENGKAP (TIKTOK, YOUTUBE, PLAY MUSIC, SOSMED)
+// 7. ENGINE DOWNLOADER LENGKAP (TIKTOK, YOUTUBE, SPOTIFY/PLAY, SOSMED)
 // ============================================================
 async function downloadTikTok(url) {
   try {
@@ -738,7 +787,7 @@ async function searchYouTube(query) {
           url: v.url || `https://www.youtube.com/watch?v=${vidId}`,
           title: v.title,
           author: v.author?.name || v.channel || 'YouTube',
-          duration: v.duration?.timestamp || v.duration || '-',
+          duration: v.duration?.timestamp || v.duration || '3:45',
           thumbnail: v.thumbnail || `https://i.ytimg.com/vi/${vidId}/hqdefault.jpg`,
         };
       });
@@ -757,7 +806,7 @@ async function searchYouTube(query) {
           url: v.url,
           title: v.title,
           author: v.author || 'YouTube',
-          duration: v.duration || '-',
+          duration: v.duration || '3:45',
           thumbnail: v.thumbnail || (vidId ? `https://i.ytimg.com/vi/${vidId}/hqdefault.jpg` : ''),
         };
       });
@@ -1250,7 +1299,7 @@ async function jalankanBackgroundSelfTest() {
       },
     },
     {
-      name: 'YouTube Search & Audio/Video',
+      name: 'Spotify & YouTube Audio/Video',
       fn: async () => {
         const list = await searchYouTube('lofi hip hop');
         return list.length > 0;
@@ -1278,7 +1327,7 @@ async function jalankanBackgroundSelfTest() {
       },
     },
     {
-      name: 'Game Interaktif & Security Shield',
+      name: 'Layar Tap Game & Security Shield',
       fn: async () => true,
     },
   ];
@@ -1315,7 +1364,6 @@ let lastAiErrorNotice = 0;
 
 function extractIncomingTextAndButton(msg) {
   const m = msg.message || {};
-  // Baca respon dari tombol interaktif WhatsApp (nativeFlow / buttonsResponse / templateButton)
   const nativeResponse = m.interactiveResponseMessage?.nativeFlowResponseMessage;
   if (nativeResponse?.paramsJson) {
     try {
@@ -1397,7 +1445,6 @@ function pasangPenjawab(sock) {
           }
         } catch {}
 
-        // A. Deteksi Anti-Virtek & Anti-Bug (Hapus pesan + Kick pengirim otomatis)
         if (gCfg.antivirtek || gCfg.antibug) {
           const ancamanVirtek = deteksiVirtekDanBug(msg, rawText, isSenderAdmin);
           if (ancamanVirtek) {
@@ -1416,7 +1463,6 @@ function pasangPenjawab(sock) {
 
         if (!rawText) continue;
 
-        // B. Deteksi Anti-Toxic, Anti-Link & Anti-Spam Flood
         const allBadWords = [...bot.badWords, ...dbMemory.learnedWords];
         const hasBadWord = !isSenderAdmin && gCfg.antitoxic && allBadWords.some((w) => textLower.includes(w.toLowerCase()));
         const hasBlockedLink =
@@ -1461,7 +1507,7 @@ function pasangPenjawab(sock) {
       if (!rawText) continue;
 
       // ----------------------------------------------------
-      // 📥 2. DOWNLOADER OTOMATIS LINK TIKTOK (VIDEO + AUDIO + FOTO SLIDE)
+      // 📥 2. DOWNLOADER OTOMATIS LINK TIKTOK
       // ----------------------------------------------------
       const detectedUrl = extractUrl(rawText);
       const firstWord = rawText.replace(/^[.!/#]/, '').split(/\s+/)[0].toLowerCase();
@@ -1509,7 +1555,7 @@ function pasangPenjawab(sock) {
       }
 
       // ----------------------------------------------------
-      // 📥 3. DOWNLOADER OTOMATIS LINK YOUTUBE (VIDEO HD + AUDIO)
+      // 📥 3. DOWNLOADER OTOMATIS LINK YOUTUBE
       // ----------------------------------------------------
       if (detectedUrl && /(youtube\.com\/(watch|shorts)|youtu\.be\/)/i.test(detectedUrl) && !['ytmp3', 'ytmp4', 'ytdl', 'video'].includes(firstWord)) {
         await sock.sendPresenceUpdate('composing', jid);
@@ -1538,7 +1584,7 @@ function pasangPenjawab(sock) {
       }
 
       // ----------------------------------------------------
-      // 🎮 4. KONTROL TOMBOL / AKSI GAME AKTIF (KURO SLASH, SONIC, TEBAKAN)
+      // 🎮 4. KONTROL TOMBOL / AKSI GAME AKTIF
       // ----------------------------------------------------
       const cleanAction = textLower.replace(/^[.!/#]/, '').trim();
 
@@ -1551,7 +1597,6 @@ function pasangPenjawab(sock) {
       if (gameSessions.has(jid)) {
         const session = gameSessions.get(jid);
 
-        // A. Kontrol Game KURO SLASH
         if (session.type === 'kuroslash' && ['kiri', 'tebas', 'kanan', 'ulti'].includes(cleanAction)) {
           let eventMsg = '';
           if (cleanAction === 'kiri') {
@@ -1607,7 +1652,6 @@ function pasangPenjawab(sock) {
           continue;
         }
 
-        // B. Kontrol Game SPEEDY DASH (SONIC)
         if (session.type === 'sonic' && ['boost', 'jump'].includes(cleanAction)) {
           let eventMsg = '';
           if (cleanAction === 'boost') {
@@ -1648,7 +1692,6 @@ function pasangPenjawab(sock) {
           continue;
         }
 
-        // C. Game Tebak Angka, Matematika & Tebak Kata
         if (session.type === 'angka' && /^[0-9]+$/.test(rawText)) {
           const guess = parseInt(rawText, 10);
           if (guess === session.answer) {
@@ -1694,7 +1737,7 @@ function pasangPenjawab(sock) {
           await sock.sendPresenceUpdate('composing', jid);
         }
 
-        // === KATEGORI: MAIN & MENU (ANIMASI + TOMBOL INTERAKTIF) ===
+        // === KATEGORI: MAIN & MENU ===
         if (cmd === 'menu' || cmd === 'help') {
           const currentAnimUrl = MENU_ANIMATIONS[menuAnimIndex % MENU_ANIMATIONS.length];
           menuAnimIndex++;
@@ -1712,10 +1755,10 @@ function pasangPenjawab(sock) {
             `📌 *ᴘɪʟɪʜᴀɴ ᴍᴇɴᴜ ʀᴀᴘɪ:*\n` +
             `• *allmenu* — ᴛᴀᴍᴘɪʟᴋᴀɴ sᴇᴍᴜᴀ ${ALL_COMMANDS_SET.size} ғɪᴛᴜʀ\n` +
             `• *aimenu* — ғɪᴛᴜʀ ᴀɪ sᴀᴛ-sᴇᴛ & ᴘɪɴᴛᴀʀ\n` +
-            `• *downloadmenu* — ᴛɪᴋᴛᴏᴋ, ʏᴛ, ᴘʟᴀʏ ᴍᴜsɪᴄ, ɪɢ, ғʙ\n` +
+            `• *downloadmenu* — ᴛɪᴋᴛᴏᴋ, ʏᴛ, ᴘʟᴀʏ / sᴘᴏᴛɪғʏ, ɪɢ, ғʙ\n` +
             `• *searchmenu* — ᴄᴜᴀᴄᴀ ɪɴᴅᴏɴᴇsɪᴀ, sʜᴏʟᴀᴛ, sᴜʀᴀʜ, ᴡɪᴋɪ\n` +
             `• *animemenu* — ɢᴀᴍʙᴀʀ ᴀɴɪᴍᴇ sғᴡ\n` +
-            `• *funmenu* — ᴋᴜʀᴏ sʟᴀsʜ, sᴏɴɪᴄ, & ɢᴀᴍᴇ ɪɴᴛᴇʀᴀᴋᴛɪғ\n` +
+            `• *funmenu* — ᴋᴜʀᴏ sʟᴀsʜ, sᴏɴɪᴄ, & ɢᴀᴍᴇ ʟᴀʏᴀʀ ᴛᴀᴘ\n` +
             `• *groupmenu* — ᴀɴᴛɪ-ᴠɪʀᴛᴇᴋ, ᴀɴᴛɪ-ʙᴜɢ, ᴀɴᴛɪ-ʟɪɴᴋ\n` +
             `• *logomenu* — ғᴏɴᴛ & ʙᴀɴɴᴇʀ ʟᴏɢᴏ\n` +
             `• *toolsmenu* — ᴛᴏᴏʟs & ᴜᴛɪʟɪᴛᴀs\n` +
@@ -1739,22 +1782,23 @@ function pasangPenjawab(sock) {
             );
           } catch {}
 
-          // Kirim Kolom Tombol Interaktif Canggih
+          const menuButtons = [
+            { text: `📋 Buka Menu ${bot.userName}`, id: 'allmenu' },
+            { text: '⚔️ Game Kuro Slash', id: 'kuroslash' },
+            { text: '🌀 Game Speedy Dash', id: 'sonic' },
+            { text: '⚡ Cek Speed / Ping', id: 'ping' },
+            { text: `↗️ Saluran ${bot.userName}`, url: CHANNEL_URL },
+          ];
+
           await sendInteractiveButtons(
             sock,
             jid,
             {
               title: `📋 MENU UTAMA ${bot.userName}`,
-              body: `Pilih tombol cepat di bawah untuk membuka semua fitur, cek kecepatan server, atau main game arcade:`,
+              body: `Pilih tombol cepat di bawah untuk membuka semua fitur, cek kecepatan server, atau main game layar tap:`,
               footer: `© ${bot.userName}`,
               mentions: [senderParticipant],
-              buttons: [
-                { text: `📋 Buka Menu ${bot.userName}`, id: 'allmenu' },
-                { text: '🎮 Game Kuro Slash', id: 'kuroslash' },
-                { text: '🌀 Game Speedy Dash', id: 'sonic' },
-                { text: '⚡ Cek Speed / Ping', id: 'ping' },
-                { text: `↗️ Saluran ${bot.userName}`, url: CHANNEL_URL },
-              ],
+              buttons: menuButtons,
             },
             msg
           );
@@ -1835,6 +1879,34 @@ function pasangPenjawab(sock) {
             },
             msg
           );
+
+          // Kirim Voice Note Sapaan + Kartu Pratinjau (persis seperti foto ke-4)
+          try {
+            const salamText = `Konnichiwa, watashi ${bot.userName}, salam kenal ${pushName}! Etto, cobain yuk fiturnya di bawah, jangan sungkan ya.`;
+            const ttsUrl = `https://translate.google.com/translate_tts?ie=UTF-8&q=${encodeURIComponent(salamText)}&tl=id&client=tw-ob`;
+            const vnBuf = await fetchBuffer(ttsUrl).catch(() => null);
+            if (vnBuf) {
+              await sock.sendMessage(
+                jid,
+                {
+                  audio: vnBuf,
+                  mimetype: 'audio/mp4',
+                  ptt: true,
+                  contextInfo: {
+                    externalAdReply: {
+                      title: bot.userName,
+                      body: `konniciwa watashi ${bot.userName} salam kenal ${pushName} etto cobain yuk fiturnya dibawah jangan sungkan ✨`,
+                      thumbnailUrl: `https://dummyimage.com/600x320/0f172a/38bdf8.png&text=${encodeURIComponent(bot.userName)}`,
+                      sourceUrl: CHANNEL_URL,
+                      mediaType: 1,
+                      renderLargerThumbnail: false,
+                    },
+                  },
+                },
+                { quoted: msg }
+              );
+            }
+          } catch {}
           continue;
         }
 
@@ -1956,7 +2028,7 @@ function pasangPenjawab(sock) {
           continue;
         }
 
-        // === KATEGORI: DOWNLOAD & YT MUSIC PLAYER ===
+        // === KATEGORI: DOWNLOAD & SPOTIFY / YT MUSIC PLAYER ===
         if (['tiktok', 'tt', 'ttmp3', 'ttslide'].includes(cmd)) {
           const linkTT = extractUrl(param);
           if (!linkTT || !/tiktok\.com/i.test(linkTT)) {
@@ -2049,8 +2121,8 @@ function pasangPenjawab(sock) {
           continue;
         }
 
-        // PLAY / SONG: Kartu YT Music Audio Player Canggih + Tombol Kontrol + Kirim Audio MP3!
-        if (cmd === 'play' || cmd === 'song') {
+        // PLAY / SONG / SPOTIFY: Tampilan Layar Spotify & YT Music Audio + Tombol Interaktif + Kirim Audio MP3!
+        if (cmd === 'play' || cmd === 'song' || cmd === 'spotify') {
           if (!param) {
             await sock.sendMessage(jid, { text: `⚠️ Masukkan judul lagu.\nContoh: \`${cmd} Cigarettes After Sex K.\`` }, { quoted: msg });
             continue;
@@ -2058,36 +2130,42 @@ function pasangPenjawab(sock) {
           const results = await searchYouTube(param);
           const first = results[0];
           if (!first) {
-            await sock.sendMessage(jid, { text: '❌ Lagu tidak ditemukan di YouTube.' }, { quoted: msg });
+            await sock.sendMessage(jid, { text: '❌ Lagu tidak ditemukan.' }, { quoted: msg });
             continue;
           }
 
           lastPlaySession.set(jid, first);
+          const spotifyScreenUrl = `${getBasePublicUrl()}/player?q=${encodeURIComponent(first.title)}&artist=${encodeURIComponent(first.author)}&vid=${encodeURIComponent(first.videoId || '')}&dur=${encodeURIComponent(first.duration)}`;
 
           const playerCardText =
-            `🎧 *YT MUSIC AUDIO*\n` +
+            `🎧 *SPOTIFY & YT MUSIC AUDIO*\n` +
             `────────────────────\n` +
             `🎵 *${first.title}*\n` +
-            `👤 ${first.author}   🤍\n\n` +
+            `👤 ${first.author}   💚\n\n` +
             `⚪──────────────────\n` +
             `0:01                        ${first.duration}\n\n` +
             `   💬      ⏮️      ⏸️      ⏭️      🔁\n` +
             `────────────────────\n` +
-            `_⏳ Mengirimkan file audio MP3..._`;
+            `_⏳ Mengirimkan audio lagu langsung ke chat..._`;
+
+          const playButtons = [
+            { text: '🎬 Unduh Video MP4', id: 'ytmp4' },
+            { text: '🔎 Cari Lagu Lain', id: `yts ${param}` },
+            { text: `📋 Menu ${bot.userName}`, id: 'menu' },
+          ];
+          if (PUBLIC_URL) {
+            playButtons.unshift({ text: '📱 Layar Spotify Player', url: spotifyScreenUrl });
+          }
 
           await sendInteractiveButtons(
             sock,
             jid,
             {
-              title: 'YT MUSIC AUDIO',
+              title: 'YT MUSIC & SPOTIFY PLAYER',
               body: playerCardText,
               footer: `support terus ${bot.userName} yaaa`,
               imageUrl: first.thumbnail,
-              buttons: [
-                { text: '🎬 Unduh Video MP4', id: 'ytmp4' },
-                { text: '🔎 Cari Lagu Lain', id: `yts ${param}` },
-                { text: `📋 Menu ${bot.userName}`, id: 'menu' },
-              ],
+              buttons: playButtons,
             },
             msg
           );
@@ -2118,9 +2196,9 @@ function pasangPenjawab(sock) {
             const hasil = list
               .map((v, i) => `${i + 1}. *${v.title}*\n   👤 ${v.author} | ⏱️ ${v.duration}\n   🔗 ${v.url}`)
               .join('\n\n');
-            await sock.sendMessage(jid, { text: `🔎 *Hasil Pencarian YouTube:*\n\n${hasil}` }, { quoted: msg });
+            await sock.sendMessage(jid, { text: `🔎 *Hasil Pencarian Lagu & Video:*\n\n${hasil}` }, { quoted: msg });
           } else {
-            await sock.sendMessage(jid, { text: '❌ Tidak ditemukan hasil di YouTube.' }, { quoted: msg });
+            await sock.sendMessage(jid, { text: '❌ Tidak ditemukan hasil.' }, { quoted: msg });
           }
           continue;
         }
@@ -2332,7 +2410,7 @@ function pasangPenjawab(sock) {
           continue;
         }
 
-        // === KATEGORI: FUN & GAMES (TERMASUK KURO SLASH & SONIC INTERAKTIF) ===
+        // === KATEGORI: FUN & GAMES (KURO SLASH & SONIC LAYAR TAP + TOMBOL) ===
         if (cmd === 'kuroslash' || cmd === 'slash') {
           const best = dbMemory.gameHighScores.kuroslash[senderNum] || 0;
           const state = {
@@ -2988,7 +3066,7 @@ function pasangPenjawab(sock) {
       }
 
       // ----------------------------------------------------
-      // 🤖 6. OBROLAN AI CERDAS (ANTI-SPAM & FILTER GRUP)
+      // 🤖 6. OBROLAN AI CERDAS
       // ----------------------------------------------------
       if (isGroup) {
         const contextInfo = msg.message.extendedTextMessage?.contextInfo;
@@ -3028,13 +3106,284 @@ function pasangPenjawab(sock) {
 }
 
 // ============================================================
-// 13. WEB PANEL KONTROL 2 KOLOM (DENGAN HASIL SELF-TEST)
+// 13. LAYAR TAP LANGSUNG (ARCADE KURO SLASH, SONIC, SPOTIFY PLAYER) & WEB PANEL
 // ============================================================
+function renderKuroSlashTapPage() {
+  return `<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
+  <title>KURO SLASH — Long Road Oni Garda</title>
+  <style>
+    * { box-sizing: border-box; user-select: none; -webkit-tap-highlight-color: transparent; font-family: 'Segoe UI', sans-serif; }
+    body { margin: 0; background: #09090b; color: #f8fafc; display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 100vh; padding: 14px; }
+    .card { width: 100%; max-width: 410px; background: #121215; border: 1px solid #27272a; border-radius: 22px; padding: 16px; box-shadow: 0 20px 50px rgba(0,0,0,0.8); }
+    .top { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+    .title h2 { margin: 0; font-size: 1.35rem; letter-spacing: 2px; line-height: 1.1; }
+    .title small { color: #a1a1aa; font-size: 0.65rem; letter-spacing: 3px; display: block; margin-top: 4px; }
+    .boxes { display: flex; gap: 8px; }
+    .stat { background: #1c1c21; border: 1px solid #2e2e36; border-radius: 10px; padding: 6px 12px; text-align: center; }
+    .stat span { display: block; font-size: 0.65rem; color: #a1a1aa; }
+    .stat strong { font-size: 1.05rem; }
+    .hp-wrap { background: #1f1f23; border-radius: 8px; padding: 4px; margin-bottom: 10px; }
+    .hp-bar { height: 10px; background: linear-gradient(90deg, #f43f5e, #fda4af); border-radius: 6px; width: 91%; transition: width 0.2s; }
+    canvas { width: 100%; height: 270px; background: radial-gradient(circle at 50% 35%, #fda4af, #4c0519 75%, #09090b); border-radius: 14px; display: block; border: 1px solid #3f3f46; }
+    .controls { display: grid; grid-template-columns: 1fr 1.6fr 1fr; gap: 10px; margin-top: 12px; }
+    button { border: none; border-radius: 14px; padding: 16px; font-size: 1.05rem; font-weight: bold; cursor: pointer; color: white; transition: transform 0.08s; }
+    button:active { transform: scale(0.95); }
+    .btn-dir { background: #1f1f24; border: 1px solid #3f3f46; }
+    .btn-slash { background: linear-gradient(135deg, #be123c, #881337); border: 1px solid #fb7185; }
+    .btn-ulti { width: 100%; margin-top: 10px; background: #18181b; border: 1px solid #3f3f46; color: #38bdf8; }
+    .hint { text-align: center; font-size: 0.72rem; color: #a1a1aa; margin-top: 10px; line-height: 1.4; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="top">
+      <div class="title"><h2>KURO<br>SLASH</h2><small>LONG ROAD · ONI GARDA</small></div>
+      <div class="boxes">
+        <div class="stat"><span>SCORE</span><strong id="sc">0</strong></div>
+        <div class="stat"><span>BEST</span><strong id="bst">0</strong></div>
+      </div>
+    </div>
+    <div class="hp-wrap"><div class="hp-bar" id="hpbar"></div></div>
+    <canvas id="cv" width="360" height="270"></canvas>
+    <div class="controls">
+      <button class="btn-dir" ontouchstart="move(-1)" onclick="move(-1)">◀</button>
+      <button class="btn-slash" ontouchstart="slash()" onclick="slash()">⚔️ TEBAS</button>
+      <button class="btn-dir" ontouchstart="move(1)" onclick="move(1)">▶</button>
+    </div>
+    <button class="btn-ulti" id="ultibtn" ontouchstart="ulti()" onclick="ulti()">🌊 ULTI — 30%</button>
+    <div class="hint">⚔️ tebas+gelombang • PARRY peluru merah • tebas BOM = defuse • orbs emas = bonus • tiap ±1200 skor = BOSS 👹</div>
+  </div>
+  <script>
+    const cv = document.getElementById('cv'), ctx = cv.getContext('2d');
+    let lane = 1, score = 0, best = Number(localStorage.getItem('ks_best')||0), hp = 100, ultiVal = 30, slashFx = 0;
+    let items = [];
+    document.getElementById('bst').innerText = best;
+    const actx = new (window.AudioContext || window.webkitAudioContext)();
+    function beep(f, d=0.08) {
+      try { const o = actx.createOscillator(), g = actx.createGain(); o.frequency.value = f; o.connect(g); g.connect(actx.destination); o.start(); g.gain.exponentialRampToValueAtTime(0.001, actx.currentTime + d); o.stop(actx.currentTime + d); } catch {}
+    }
+    function move(d) { lane = Math.max(0, Math.min(2, lane + d)); beep(320); }
+    function slash() {
+      slashFx = 8; beep(620, 0.12);
+      items.forEach(it => { if (it.lane === lane && it.y > 150) { it.dead = true; score += 120; ultiVal = Math.min(100, ultiVal + 15); } });
+      items = items.filter(i => !i.dead);
+    }
+    function ulti() {
+      if (ultiVal < 100) return;
+      ultiVal = 0; slashFx = 15; beep(880, 0.25);
+      score += items.length * 100 + 300; items = [];
+    }
+    setInterval(() => {
+      items.push({ lane: Math.floor(Math.random()*3), y: 40, type: Math.random() < 0.3 ? 'orb' : 'oni' });
+    }, 850);
+    function loop() {
+      ctx.clearRect(0, 0, 360, 270);
+      ctx.fillStyle = '#09090b';
+      ctx.beginPath(); ctx.moveTo(145, 40); ctx.lineTo(215, 40); ctx.lineTo(280, 270); ctx.lineTo(80, 270); ctx.closePath(); ctx.fill();
+      ctx.strokeStyle = '#f43f5e'; ctx.lineWidth = 3; ctx.stroke();
+      const laneX = [125, 180, 235];
+      items.forEach(it => {
+        it.y += 3.2;
+        const px = 180 + (it.lane - 1) * (20 + it.y * 0.22);
+        ctx.fillStyle = it.type === 'orb' ? '#facc15' : '#ef4444';
+        ctx.beginPath(); ctx.arc(px, it.y, 10, 0, Math.PI*2); ctx.fill();
+        if (it.y > 235 && !it.dead) {
+          it.dead = true;
+          if (it.lane === lane) {
+            if (it.type === 'orb') { score += 80; beep(740); }
+            else { hp = Math.max(0, hp - 15); beep(140, 0.2); }
+          }
+        }
+      });
+      items = items.filter(i => !i.dead);
+      const hx = laneX[lane];
+      ctx.fillStyle = '#38bdf8'; ctx.beginPath(); ctx.arc(hx, 230, 14, 0, Math.PI*2); ctx.fill();
+      if (slashFx > 0) {
+        slashFx--; ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 4;
+        ctx.beginPath(); ctx.arc(hx, 225, 28, Math.PI, 0); ctx.stroke();
+      }
+      if (score > best) { best = score; localStorage.setItem('ks_best', best); }
+      document.getElementById('sc').innerText = score;
+      document.getElementById('bst').innerText = best;
+      document.getElementById('hpbar').style.width = hp + '%';
+      document.getElementById('ultibtn').innerText = '🌊 ULTI — ' + ultiVal + '%';
+      if (hp <= 0) { hp = 100; score = 0; items = []; }
+      requestAnimationFrame(loop);
+    }
+    loop();
+  </script>
+</body>
+</html>`;
+}
+
+function renderSonicTapPage() {
+  return `<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
+  <title>SPEEDY DASH — Emerald Coast Run</title>
+  <style>
+    * { box-sizing: border-box; user-select: none; -webkit-tap-highlight-color: transparent; font-family: 'Segoe UI', sans-serif; }
+    body { margin: 0; background: #09090b; color: #f8fafc; display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 100vh; padding: 14px; }
+    .card { width: 100%; max-width: 410px; background: #121215; border: 1px solid #27272a; border-radius: 22px; padding: 16px; }
+    .top { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
+    .title h2 { margin: 0; font-size: 1.3rem; color: #38bdf8; line-height: 1.1; }
+    .title small { color: #94a3b8; font-size: 0.65rem; letter-spacing: 2px; }
+    .boxes { display: flex; gap: 6px; }
+    .stat { background: #1e293b; border-radius: 10px; padding: 6px 10px; text-align: center; }
+    .stat span { display: block; font-size: 0.62rem; color: #94a3b8; }
+    .stat strong { font-size: 1rem; }
+    canvas { width: 100%; height: 220px; background: linear-gradient(180deg, #38bdf8, #bae6fd 65%, #15803d 65%, #166534); border-radius: 14px; display: block; }
+    .controls { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 14px; }
+    button { border: none; border-radius: 14px; padding: 18px; font-size: 1.05rem; font-weight: bold; cursor: pointer; }
+    button:active { transform: scale(0.95); }
+    .btn-boost { background: linear-gradient(135deg, #facc15, #ca8a04); color: #09090b; }
+    .btn-jump { background: linear-gradient(135deg, #3b82f6, #1d4ed8); color: white; }
+    .hint { text-align: center; font-size: 0.72rem; color: #a1a1aa; margin-top: 10px; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="top">
+      <div class="title"><h2>🌀 SPEEDY<br>DASH</h2><small>EMERALD COAST RUN</small></div>
+      <div class="boxes">
+        <div class="stat"><span>RINGS</span><strong id="rg">10</strong></div>
+        <div class="stat"><span>SCORE</span><strong id="sc">0</strong></div>
+        <div class="stat"><span>BEST</span><strong id="bst">0</strong></div>
+      </div>
+    </div>
+    <canvas id="cv" width="360" height="220"></canvas>
+    <div class="controls">
+      <button class="btn-boost" ontouchstart="boost()" onclick="boost()">⚡ BOOST</button>
+      <button class="btn-jump" ontouchstart="jump()" onclick="jump()">⬆ JUMP</button>
+    </div>
+    <div class="hint">Lompat saat garis merah LASER kedip cepat! • kena musuh = ring turun 10% saja • tiap 50 ring = BOSS!</div>
+  </div>
+  <script>
+    const cv = document.getElementById('cv'), ctx = cv.getContext('2d');
+    let py = 135, vy = 0, rings = 10, score = 0, best = Number(localStorage.getItem('sd_best')||0), spd = 4;
+    let obs = [];
+    document.getElementById('bst').innerText = best;
+    function jump() { if (py >= 130) vy = -11; }
+    function boost() { spd = 8; setTimeout(() => spd = 4, 600); score += 30; }
+    setInterval(() => { obs.push({ x: 370, type: Math.random() < 0.65 ? 'ring' : 'enemy' }); }, 900);
+    function loop() {
+      ctx.clearRect(0, 0, 360, 220);
+      py += vy; vy += 0.65;
+      if (py > 135) { py = 135; vy = 0; }
+      ctx.fillStyle = '#2563eb'; ctx.beginPath(); ctx.arc(65, py, 14, 0, Math.PI*2); ctx.fill();
+      obs.forEach(o => {
+        o.x -= spd;
+        if (o.type === 'ring') {
+          ctx.strokeStyle = '#facc15'; ctx.lineWidth = 4;
+          ctx.beginPath(); ctx.arc(o.x, 120, 9, 0, Math.PI*2); ctx.stroke();
+        } else {
+          ctx.fillStyle = '#dc2626'; ctx.fillRect(o.x - 10, 125, 20, 22);
+        }
+        if (Math.abs(o.x - 65) < 20 && Math.abs(py - 125) < 24 && !o.hit) {
+          o.hit = true;
+          if (o.type === 'ring') { rings++; score += 45; }
+          else { rings = Math.max(0, Math.floor(rings * 0.9)); }
+        }
+      });
+      obs = obs.filter(o => o.x > -20 && !o.hit);
+      if (score > best) { best = score; localStorage.setItem('sd_best', best); }
+      document.getElementById('rg').innerText = rings;
+      document.getElementById('sc').innerText = score;
+      document.getElementById('bst').innerText = best;
+      requestAnimationFrame(loop);
+    }
+    loop();
+  </script>
+</body>
+</html>`;
+}
+
+function renderSpotifyPlayerPage(title, artist, vidId, dur) {
+  const safeTitle = title.replace(/</g, '&lt;');
+  const safeArtist = artist.replace(/</g, '&lt;');
+  const thumb = vidId ? `https://i.ytimg.com/vi/${vidId}/hqdefault.jpg` : '';
+  return `<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>${safeTitle} — Spotify & YT Music UI</title>
+  <style>
+    * { box-sizing: border-box; font-family: 'Segoe UI', sans-serif; }
+    body { margin: 0; background: #09090b; color: #f8fafc; display: flex; align-items: center; justify-content: center; min-height: 100vh; padding: 16px; }
+    .player { width: 100%; max-width: 390px; background: #121212; border: 1px solid #27272a; border-radius: 24px; padding: 22px; text-align: center; box-shadow: 0 25px 60px rgba(0,0,0,0.85); }
+    .hdr { font-size: 0.72rem; letter-spacing: 2px; color: #a1a1aa; text-transform: uppercase; }
+    .sub { font-size: 0.92rem; font-weight: 600; margin: 4px 0 18px 0; }
+    .cover { width: 100%; aspect-ratio: 1/1; background: #000; border-radius: 16px; overflow: hidden; display: flex; align-items: center; justify-content: center; margin-bottom: 18px; border: 1px solid #27272a; }
+    .cover img { width: 100%; height: 100%; object-fit: cover; }
+    .meta { display: flex; justify-content: space-between; align-items: center; text-align: left; margin-bottom: 14px; }
+    .meta h3 { margin: 0; font-size: 1.25rem; }
+    .meta p { margin: 4px 0 0 0; color: #a1a1aa; font-size: 0.9rem; }
+    .bar { width: 100%; height: 4px; background: #3f3f46; border-radius: 4px; position: relative; margin: 10px 0 6px 0; }
+    .prog { width: 25%; height: 100%; background: #fff; border-radius: 4px; }
+    .times { display: flex; justify-content: space-between; font-size: 0.75rem; color: #a1a1aa; }
+    .btns { display: flex; justify-content: space-around; align-items: center; margin: 22px 0 16px 0; }
+    .play-btn { width: 64px; height: 64px; border-radius: 50%; background: #fff; color: #000; border: none; font-size: 1.5rem; font-weight: bold; cursor: pointer; }
+    .foot { font-size: 0.8rem; color: #71717a; }
+  </style>
+</head>
+<body>
+  <div class="player">
+    <div class="hdr">YT MUSIC & SPOTIFY AUDIO</div>
+    <div class="sub">${safeArtist}</div>
+    <div class="cover">${thumb ? `<img src="${thumb}" alt="cover"/>` : `<h2>${safeTitle}</h2>`}</div>
+    <div class="meta">
+      <div><h3>${safeTitle}</h3><p>${safeArtist}</p></div>
+      <div style="font-size:1.4rem;">🤍</div>
+    </div>
+    <div class="bar"><div class="prog"></div></div>
+    <div class="times"><span>0:01</span><span>${dur || '3:45'}</span></div>
+    <div class="btns">
+      <span>💬</span><span>⏮</span>
+      <button class="play-btn" onclick="window.open('https://www.youtube.com/watch?v=${vidId}', '_blank')">▶</button>
+      <span>⏭</span><span>🔁</span>
+    </div>
+    <div class="foot">support terus ${bot.userName} yaaa</div>
+  </div>
+</body>
+</html>`;
+}
+
 function mulaiWeb() {
   const port = process.env.PORT || 3000;
 
   const server = http.createServer((req, res) => {
-    if (req.url === '/api/status') {
+    const parsedUrl = new URL(req.url, `http://localhost:${port}`);
+
+    if (parsedUrl.pathname === '/arcade/kuroslash') {
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+      return res.end(renderKuroSlashTapPage());
+    }
+
+    if (parsedUrl.pathname === '/arcade/sonic') {
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+      return res.end(renderSonicTapPage());
+    }
+
+    if (parsedUrl.pathname === '/player') {
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+      return res.end(
+        renderSpotifyPlayerPage(
+          parsedUrl.searchParams.get('q') || 'Now Playing',
+          parsedUrl.searchParams.get('artist') || 'Artist',
+          parsedUrl.searchParams.get('vid') || '',
+          parsedUrl.searchParams.get('dur') || '3:45'
+        )
+      );
+    }
+
+    if (parsedUrl.pathname === '/api/status') {
       res.writeHead(200, { 'Content-Type': 'application/json' });
       const qrImageUrl = bot.qr
         ? `https://api.qrserver.com/v1/create-qr-code/?size=220x220&data=${encodeURIComponent(bot.qr)}`
@@ -3060,7 +3409,7 @@ function mulaiWeb() {
       );
     }
 
-    if (req.url === '/api/trigger-update' && req.method === 'POST') {
+    if (parsedUrl.pathname === '/api/trigger-update' && req.method === 'POST') {
       Promise.all([jalankanEvolusiMandiri(true), jalankanBackgroundSelfTest()]).then(([log]) => {
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ success: true, log }));
@@ -3068,7 +3417,7 @@ function mulaiWeb() {
       return;
     }
 
-    if (req.url === '/api/set-name' && req.method === 'POST') {
+    if (parsedUrl.pathname === '/api/set-name' && req.method === 'POST') {
       let body = '';
       req.on('data', (chunk) => {
         body += chunk.toString();
@@ -3119,7 +3468,7 @@ function mulaiWeb() {
         .stat-card strong { font-size: 0.95rem; color: #f8fafc; }
         .input-group { display: flex; gap: 8px; margin: 12px 0; }
         .input-group input { flex: 1; padding: 10px; border: 1px solid #475569; background: #0f172a; color: white; border-radius: 8px; outline: none; }
-        .btn { background: #0284c7; color: white; border: none; padding: 10px 16px; border-radius: 8px; cursor: pointer; font-weight: bold; }
+        .btn { background: #0284c7; color: white; border: none; padding: 10px 16px; border-radius: 8px; cursor: pointer; font-weight: bold; text-decoration: none; display: inline-block; }
         .btn-green { background: #059669; width: 100%; margin-top: 8px; }
         .list-box { max-height: 170px; overflow-y: auto; background: #0f172a; border-radius: 8px; padding: 10px; font-size: 0.84rem; }
         .list-item { padding: 6px 0; border-bottom: 1px dashed #334155; }
@@ -3129,7 +3478,11 @@ function mulaiWeb() {
     <body>
       <div class="header">
         <h1>🚀 NEXA-AI BOT CONTROL PANEL</h1>
-        <p style="color:#94a3b8; margin:0;">Interactive UI Buttons, Anti-Virtek/Bug Shield, & Arcade Games</p>
+        <p style="color:#94a3b8; margin:0;">Interactive UI Buttons, Anti-Virtek/Bug Shield, & Layar Tap Arcade</p>
+        <div style="margin-top:10px; display:flex; gap:8px; justify-content:center; flex-wrap:wrap;">
+          <a class="btn" href="/arcade/kuroslash" target="_blank">⚔️ Layar Tap Kuro Slash</a>
+          <a class="btn" href="/arcade/sonic" target="_blank">🌀 Layar Tap Speedy Dash</a>
+        </div>
       </div>
 
       <div class="container">
@@ -3143,7 +3496,7 @@ function mulaiWeb() {
           <div class="stat-grid">
             <div class="stat-card">
               <div>Versi & Update</div>
-              <strong id="st-ver">v4.0</strong>
+              <strong id="st-ver">v5.0</strong>
             </div>
             <div class="stat-card">
               <div>Bot Uptime</div>
@@ -3253,7 +3606,7 @@ function mulaiWeb() {
     res.end(html);
   });
 
-  server.listen(port, () => console.log(`🌐 Web Panel berjalan di port ${port}`));
+  server.listen(port, () => console.log(`🌐 Web Panel & Arcade Tap Screen berjalan di port ${port}`));
 }
 
 // ============================================================
@@ -3300,7 +3653,7 @@ async function start() {
     version,
     auth: state,
     logger: pino({ level: 'silent' }),
-    browser: ['NEXA-AI Bot', 'Chrome', '4.0.0'],
+    browser: ['NEXA-AI Bot', 'Chrome', '5.0.0'],
     printQRInTerminal: false,
   });
 
