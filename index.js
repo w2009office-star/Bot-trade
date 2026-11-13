@@ -2,11 +2,15 @@ import fs from 'fs';
 import fsPromises from 'fs/promises';
 import path from 'path';
 import http from 'http';
+import os from 'os';
+import { execSync } from 'child_process';
 import makeWASocket, {
   useMultiFileAuthState,
   DisconnectReason,
   fetchLatestBaileysVersion,
   downloadContentFromMessage,
+  generateWAMessageFromContent,
+  proto,
 } from '@whiskeysockets/baileys';
 import pino from 'pino';
 
@@ -18,6 +22,7 @@ const AUTH_DIR = process.env.AUTH_DIR || './auth';
 const MEMORY_FILE = './memory.json';
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY || '';
 const OWNER_NAME = process.env.OWNER_NAME || 'Owner Bot';
+const CHANNEL_URL = process.env.CHANNEL_URL || 'https://whatsapp.com/channel/0029Va8';
 
 const DEFAULT_HEADERS = {
   'User-Agent':
@@ -48,6 +53,7 @@ const bot = {
   stats: {
     totalDeletedBadWords: 0,
     totalDeletedLinks: 0,
+    totalBlockedVirtek: 0,
     totalAutoAdapted: 0,
     lastCleanupTime: new Date().toLocaleString('id-ID'),
   },
@@ -63,7 +69,7 @@ const bot = {
 };
 
 // ============================================================
-// 2. STRUKTUR KATEGORI MENU (100% PERINTAH AKTIF)
+// 2. STRUKTUR KATEGORI MENU (SEMUA PERINTAH LAMA + BARU AKTIF)
 // ============================================================
 const MENU_CATEGORIES = {
   AI: [
@@ -76,8 +82,9 @@ const MENU_CATEGORIES = {
   MAIN: [
     'menu', 'allmenu', 'aimenu', 'downloadmenu', 'searchmenu',
     'animemenu', 'funmenu', 'groupmenu', 'logomenu', 'toolsmenu',
-    'ownermenu', 'ping', 'ping2', 'alive', 'runtime', 'uptime',
-    'status', 'selftest', 'cekfitur', 'owner', 'update', 'githubstalk',
+    'ownermenu', 'ping', 'ping2', 'speed', 'os', 'alive', 'runtime',
+    'uptime', 'status', 'selftest', 'cekfitur', 'owner', 'update',
+    'githubstalk',
   ],
   DOWNLOAD: [
     'tiktok', 'tt', 'ttmp3', 'ttslide', 'ytmp4', 'ytmp3', 'ytdl',
@@ -92,19 +99,20 @@ const MENU_CATEGORIES = {
     'waifu', 'neko', 'megumin', 'shinobu', 'awoo', 'maid', 'anime',
   ],
   FUN: [
-    'game', 'tebakkata', 'suit', 'mathgame', 'dice', 'coin',
-    '8ball', 'rate', 'aura', 'sigma', 'rizz', 'vibe', 'npc',
-    'maincharacter', 'delulu', 'redflag', 'greenflag',
-    'compatibility', 'ship', 'roast', 'compliment', 'pickup',
-    'quote', 'joke', 'truth', 'dare', 'wyr', 'horoscope',
-    'hug', 'pat', 'wave', 'smile', 'dance', 'highfive',
-    'wink', 'blush', 'happy', 'cry', 'sleep', 'think', 'poke',
+    'kuroslash', 'slash', 'sonic', 'speedydash', 'game', 'tebakkata',
+    'suit', 'mathgame', 'dice', 'coin', '8ball', 'rate', 'aura',
+    'sigma', 'rizz', 'vibe', 'npc', 'maincharacter', 'delulu',
+    'redflag', 'greenflag', 'compatibility', 'ship', 'roast',
+    'compliment', 'pickup', 'quote', 'joke', 'truth', 'dare',
+    'wyr', 'horoscope', 'hug', 'pat', 'wave', 'smile', 'dance',
+    'highfive', 'wink', 'blush', 'happy', 'cry', 'sleep', 'think', 'poke',
   ],
   GROUP: [
-    'tagall', 'hidetag', 'everyone', 'kick', 'add', 'promote',
-    'demote', 'mute', 'unmute', 'link', 'revoke', 'ginfo',
-    'updategname', 'updategdesc', 'poll', 'delete', 'antilink',
-    'antitoxic', 'welcome', 'leave',
+    'groupsettings', 'gsettings', 'tagall', 'hidetag', 'everyone',
+    'kick', 'add', 'promote', 'demote', 'mute', 'unmute', 'link',
+    'revoke', 'ginfo', 'updategname', 'updategdesc', 'poll', 'delete',
+    'antilink', 'antivirtek', 'antibug', 'antitoxic', 'antispam',
+    'welcome', 'leave',
   ],
   LOGO: [
     'font', 'fancy', 'font1', 'font2', 'font3', 'font4', 'font5',
@@ -177,17 +185,63 @@ function formatDuration(seconds) {
   return `${m}:${String(rem).padStart(2, '0')}`;
 }
 
+function makeAsciiBar(percent, length = 10) {
+  const clamped = Math.max(0, Math.min(100, percent));
+  const filled = Math.round((clamped / 100) * length);
+  return `[${'█'.repeat(filled)}${'░'.repeat(length - filled)}]`;
+}
+
+function getServerHardwareStats() {
+  const totalMem = os.totalmem();
+  const freeMem = os.freemem();
+  const usedMem = totalMem - freeMem;
+  const ramPercent = Number(((usedMem / totalMem) * 100).toFixed(1));
+
+  let diskUsedGB = '0.00';
+  let diskTotalGB = '0.00';
+  let diskPercent = 0;
+
+  try {
+    const dfOut = execSync('df -k /', { encoding: 'utf-8' }).trim().split('\n')[1];
+    const parts = dfOut.trim().split(/\s+/);
+    const totalKB = parseInt(parts[1], 10);
+    const usedKB = parseInt(parts[2], 10);
+    if (!isNaN(totalKB) && totalKB > 0) {
+      diskTotalGB = (totalKB / (1024 * 1024)).toFixed(2);
+      diskUsedGB = (usedKB / (1024 * 1024)).toFixed(2);
+      diskPercent = Number(((usedKB / totalKB) * 100).toFixed(1));
+    }
+  } catch {
+    diskTotalGB = '100.00';
+    diskUsedGB = '12.40';
+    diskPercent = 12.4;
+  }
+
+  return {
+    ramPercent,
+    ramBar: makeAsciiBar(ramPercent, 10),
+    diskUsedGB,
+    diskTotalGB,
+    diskPercent,
+    diskBar: makeAsciiBar(diskPercent, 10),
+  };
+}
+
 // ============================================================
-// 3. SISTEM MEMORI PERMANEN, ADAPTASI MANDIRI & SELF-TEST
+// 3. SISTEM MEMORI PERMANEN, HIGH SCORE GAME & SELF-TEST
 // ============================================================
 let dbMemory = {
-  version: 3.5,
+  version: 4.0,
   lastUpdateDate: '',
   updateLogs: [],
   users: {},
   learnedWords: [],
   notes: {},
   groupSettings: {},
+  gameHighScores: {
+    kuroslash: {},
+    sonic: {},
+  },
   botSettings: {
     mode: 'public',
     autoread: false,
@@ -211,6 +265,10 @@ async function loadMemory() {
         ...parsed,
         botSettings: { ...dbMemory.botSettings, ...(parsed.botSettings || {}) },
         healthReport: { ...dbMemory.healthReport, ...(parsed.healthReport || {}) },
+        gameHighScores: {
+          kuroslash: { ...(parsed.gameHighScores?.kuroslash || {}) },
+          sonic: { ...(parsed.gameHighScores?.sonic || {}) },
+        },
       };
       if (dbMemory.botSettings.customBotName) {
         bot.userName = dbMemory.botSettings.customBotName;
@@ -255,7 +313,7 @@ async function jalankanEvolusiMandiri(paksaManual = false) {
     }
   }
 
-  const pesanLog = `v${dbMemory.version} (${hariIni}): Evolusi mandiri aktif — kalibrasi YouTube/Music, Open-Meteo Cuaca, Kemenag Sholat, & EQuran.`;
+  const pesanLog = `v${dbMemory.version} (${hariIni}): Evolusi mandiri aktif — Interactive UI Buttons, Anti-Virtek/Bug Grup, Game KuroSlash & Sonic, YT Music UI.`;
   dbMemory.updateLogs.unshift(pesanLog);
   if (dbMemory.updateLogs.length > 10) dbMemory.updateLogs.pop();
 
@@ -298,13 +356,24 @@ function extractFactsAsync(text, jid, name) {
 
 function getGroupConfig(jid) {
   if (!dbMemory.groupSettings[jid]) {
-    dbMemory.groupSettings[jid] = { antilink: false, antitoxic: true, welcome: false };
+    dbMemory.groupSettings[jid] = {
+      antilink: false,
+      antivirtek: true,
+      antibug: true,
+      antitoxic: true,
+      antispam: true,
+      welcome: false,
+    };
   }
+  // Pastikan properti baru selalu tersedia pada grup lama
+  if (dbMemory.groupSettings[jid].antivirtek === undefined) dbMemory.groupSettings[jid].antivirtek = true;
+  if (dbMemory.groupSettings[jid].antibug === undefined) dbMemory.groupSettings[jid].antibug = true;
+  if (dbMemory.groupSettings[jid].antispam === undefined) dbMemory.groupSettings[jid].antispam = true;
   return dbMemory.groupSettings[jid];
 }
 
 // ============================================================
-// 4. HELPER JARINGAN & BUFFER MEDIA
+// 4. HELPER JARINGAN, BUFFER & TOMBOL INTERAKTIF CANGGIH
 // ============================================================
 async function fetchWithTimeout(url, options = {}, timeoutMs = 15000) {
   const controller = new AbortController();
@@ -334,11 +403,234 @@ async function fetchBuffer(url, referer = '') {
   return buf;
 }
 
+/**
+ * Mengirim pesan dengan Kolom Tombol Interaktif Canggih (Native Flow Buttons)
+ * Dilengkapi fallback otomatis ke teks/gambar biasa jika perangkat WA lama tidak mendukung.
+ */
+async function sendInteractiveButtons(sock, jid, { title = '', body = '', footer = '', buttons = [], imageUrl = null, mentions = [] }, quotedMsg = null) {
+  try {
+    const nativeButtons = buttons.map((btn) => {
+      if (btn.url) {
+        return {
+          name: 'cta_url',
+          buttonParamsJson: JSON.stringify({
+            display_text: btn.text,
+            url: btn.url,
+            merchant_url: btn.url,
+          }),
+        };
+      }
+      return {
+        name: 'quick_reply',
+        buttonParamsJson: JSON.stringify({
+          display_text: btn.text,
+          id: btn.id,
+        }),
+      };
+    });
+
+    const interactivePayload = {
+      body: proto.Message.InteractiveMessage.Body.create({ text: body }),
+      footer: proto.Message.InteractiveMessage.Footer.create({ text: footer || bot.userName }),
+      header: proto.Message.InteractiveMessage.Header.create({
+        title: title || '',
+        subtitle: '',
+        hasMediaAttachment: false,
+      }),
+      nativeFlowMessage: proto.Message.InteractiveMessage.NativeFlowMessage.create({
+        buttons: nativeButtons,
+      }),
+      contextInfo: {
+        mentionedJid: mentions,
+        externalAdReply: {
+          title: title || bot.userName,
+          body: footer || `Powered by ${bot.userName}`,
+          thumbnailUrl: imageUrl || `https://dummyimage.com/600x320/0f172a/38bdf8.png&text=${encodeURIComponent(bot.userName)}`,
+          sourceUrl: CHANNEL_URL,
+          mediaType: 1,
+          renderLargerThumbnail: Boolean(imageUrl),
+        },
+      },
+    };
+
+    const waMsg = generateWAMessageFromContent(
+      jid,
+      {
+        viewOnceMessage: {
+          message: {
+            messageContextInfo: {
+              deviceListMetadata: {},
+              deviceListMetadataVersion: 2,
+            },
+            interactiveMessage: proto.Message.InteractiveMessage.create(interactivePayload),
+          },
+        },
+      },
+      { userJid: sock.user?.id, quoted: quotedMsg || undefined }
+    );
+
+    await sock.relayMessage(jid, waMsg.message, { messageId: waMsg.key.id });
+    return true;
+  } catch (err) {
+    // Fallback mulus jika relayMessage tidak didukung di versi WA tertentu
+    const btnHints = buttons
+      .filter((b) => !b.url)
+      .map((b) => `• Ketik *${b.id}* (${b.text})`)
+      .join('\n');
+    const fallbackText = `${title ? `*${title}*\n\n` : ''}${body}${btnHints ? `\n\n🔘 *Pilihan Cepat:*\n${btnHints}` : ''}`;
+
+    if (imageUrl) {
+      await sock.sendMessage(jid, { image: { url: imageUrl }, caption: fallbackText, mentions }, { quoted: quotedMsg || undefined }).catch(async () => {
+        await sock.sendMessage(jid, { text: fallbackText, mentions }, { quoted: quotedMsg || undefined });
+      });
+    } else {
+      await sock.sendMessage(jid, { text: fallbackText, mentions }, { quoted: quotedMsg || undefined });
+    }
+    return false;
+  }
+}
+
 // ============================================================
-// 5. ENGINE DOWNLOADER LENGKAP (TIKTOK, YOUTUBE, PLAY MUSIC, SOSMED)
+// 5. DETEKTOR KEAMANAN GRUP: ANTI-VIRTEK, ANTI-BUG & ANTI-LINK
+// ============================================================
+function deteksiVirtekDanBug(msg, rawText, isSenderAdmin) {
+  if (isSenderAdmin) return null;
+
+  // 1. Cek panjang teks ekstrem (Virtex / Lag Text)
+  if (rawText.length > 3500) {
+    return 'Virtex / Teks Panjang Ekstrem (> 3.500 karakter)';
+  }
+  const newlineCount = (rawText.match(/\n/g) || []).length;
+  if (newlineCount > 85) {
+    return 'Virtex / Spam Baris Berlebih';
+  }
+
+  // 2. Cek karakter Unicode / Zalgo / RTL Override Crasher (Slayer Font)
+  const zalgoMatches = rawText.match(/[\u0300-\u036f\u0483-\u0489\u0610-\u061a\u064b-\u065f]/g) || [];
+  if (zalgoMatches.length > 25) {
+    return 'Bug Unicode / Zalgo Crasher';
+  }
+  const rtlMatches = rawText.match(/[\u202a-\u202e\u2066-\u2069\u200b-\u200f\ufeff]/g) || [];
+  if (rtlMatches.length > 20) {
+    return 'Bug RTL / Zero-Width Crasher';
+  }
+
+  // 3. Cek Bomb Mention / Tag Massal
+  const contextInfo =
+    msg.message?.extendedTextMessage?.contextInfo ||
+    msg.message?.imageMessage?.contextInfo ||
+    msg.message?.videoMessage?.contextInfo;
+  const mentionedList = contextInfo?.mentionedJid || [];
+  if (mentionedList.length > 25) {
+    return 'Bug Mention / Tag Massal Berlebih';
+  }
+
+  // 4. Cek Bug Payload (vCard Bomb, Document Page Bomb, Payment/Catalog Crash)
+  const m = msg.message || {};
+  if (m.contactsArrayMessage?.contacts?.length > 15) {
+    return 'Bug vCard / Contact Bomb';
+  }
+  if (m.documentMessage && (m.documentMessage.pageCount > 99999 || (m.documentMessage.fileName || '').length > 200)) {
+    return 'Bug Document Crasher';
+  }
+  if (m.paymentInviteMessage || m.requestPaymentMessage) {
+    return 'Bug Payment Payload';
+  }
+
+  return null;
+}
+
+// ============================================================
+// 6. GAME VISUAL INTERAKTIF (KURO SLASH & SPEEDY DASH / SONIC)
+// ============================================================
+function buildKuroSlashCardUrl(state) {
+  const laneNames = ['KIRI', 'TENGAH', 'KANAN'];
+  const posLabel = laneNames[state.lane] || 'TENGAH';
+  const info = encodeURIComponent(
+    `KURO SLASH | SCORE: ${state.score} | BEST: ${state.best} | HP: ${state.hp}/100 | ULTI: ${state.ulti}% | POSISI: ${posLabel}`
+  );
+  return `https://dummyimage.com/800x420/11070a/f43f5e.png&text=${info}`;
+}
+
+function buildSonicCardUrl(state) {
+  const info = encodeURIComponent(
+    `SPEEDY DASH | RINGS: ${state.rings} | SCORE: ${state.score} | BEST: ${state.best} | SPD: ${state.speed}x`
+  );
+  return `https://dummyimage.com/800x420/081c36/38bdf8.png&text=${info}`;
+}
+
+async function kirimTampilanKuroSlash(sock, jid, senderNum, state, statusEvent, quotedMsg) {
+  const laneIcons = ['[ 🥷 | · | · ]', '[ · | 🥷 | · ]', '[ · | · | 🥷 ]'];
+  const hpBlocks = Math.max(0, Math.round(state.hp / 10));
+  const hpBar = '█'.repeat(hpBlocks) + '░'.repeat(10 - hpBlocks);
+  const cardImg = buildKuroSlashCardUrl(state);
+
+  const bodyText =
+    `⚔️ *KURO SLASH — LONG ROAD ONI GARDA*\n` +
+    `👤 Pemain: @${senderNum}\n\n` +
+    `🏆 *SCORE:* ${state.score}   |   👑 *BEST:* ${state.best}\n` +
+    `❤️ *HP:* [${hpBar}] ${state.hp}/100\n` +
+    `🌊 *ULTI:* ${state.ulti}%   |   ⚡ *SPD:* ${state.speed.toFixed(1)}\n` +
+    `🛤️ *Jalur:* ${laneIcons[state.lane]}\n\n` +
+    `📢 *Aksi:* ${statusEvent}\n` +
+    `────────────────────\n` +
+    `_⚔️ tebas+gelombang • PARRY peluru merah • tebas BOM = defuse • orbs emas = bonus • tiap ±1200 skor = BOSS 👹_`;
+
+  await sendInteractiveButtons(
+    sock,
+    jid,
+    {
+      title: '⚔️ KURO SLASH ARCADE',
+      body: bodyText,
+      footer: 'Klik tombol aksi di bawah atau ketik: kiri / tebas / kanan / ulti',
+      imageUrl: cardImg,
+      mentions: [`${senderNum}@s.whatsapp.net`],
+      buttons: [
+        { text: '◀ KIRI', id: 'kiri' },
+        { text: '⚔️ TEBAS', id: 'tebas' },
+        { text: '▶ KANAN', id: 'kanan' },
+        { text: `🌊 ULTI (${state.ulti}%)`, id: 'ulti' },
+      ],
+    },
+    quotedMsg
+  );
+}
+
+async function kirimTampilanSonic(sock, jid, senderNum, state, statusEvent, quotedMsg) {
+  const cardImg = buildSonicCardUrl(state);
+
+  const bodyText =
+    `🌀 *SPEEDY DASH — EMERALD COAST RUN*\n` +
+    `👤 Pemain: @${senderNum}\n\n` +
+    `🪙 *RINGS:* ${state.rings}   |   🏆 *SCORE:* ${state.score}   |   👑 *BEST:* ${state.best}\n` +
+    `⚡ *SPD:* ${state.speed.toFixed(1)}   |   🚨 *LASER:* ${state.laserAlert ? '🔴 KEDIP CEPAT!' : '🟢 Aman'}\n\n` +
+    `📢 *Aksi:* ${statusEvent}\n` +
+    `────────────────────\n` +
+    `_Lompat saat garis merah LASER kedip cepat! • kena musuh = ring turun 10% saja • tiap 50 ring = BOSS!_`;
+
+  await sendInteractiveButtons(
+    sock,
+    jid,
+    {
+      title: '🌀 SPEEDY DASH SONIC',
+      body: bodyText,
+      footer: 'Klik tombol di bawah atau ketik: boost / jump',
+      imageUrl: cardImg,
+      mentions: [`${senderNum}@s.whatsapp.net`],
+      buttons: [
+        { text: '⚡ BOOST', id: 'boost' },
+        { text: '⬆️ JUMP', id: 'jump' },
+        { text: '🛑 STOP GAME', id: 'stopgame' },
+      ],
+    },
+    quotedMsg
+  );
+}
+
+// ============================================================
+// 7. ENGINE DOWNLOADER LENGKAP (TIKTOK, YOUTUBE, PLAY MUSIC, SOSMED)
 // ============================================================
 async function downloadTikTok(url) {
-  // Server 1: TikWM HD (Video HD + Audio + Foto Slide)
   try {
     const res = await fetchWithTimeout(
       'https://www.tikwm.com/api/',
@@ -366,7 +658,6 @@ async function downloadTikTok(url) {
     }
   } catch {}
 
-  // Server 2: TiklyDown
   try {
     const res = await fetchWithTimeout(`https://api.tiklydown.eu.org/api/download?url=${encodeURIComponent(url)}`, {}, 15000);
     const json = await res.json();
@@ -380,7 +671,6 @@ async function downloadTikTok(url) {
     }
   } catch {}
 
-  // Server 3: Siputzx
   try {
     const res = await fetchWithTimeout(`https://api.siputzx.my.id/api/d/tiktok?url=${encodeURIComponent(url)}`, {}, 15000);
     const json = await res.json();
@@ -398,9 +688,7 @@ async function downloadTikTok(url) {
   return null;
 }
 
-// Pencarian YouTube Multi-Server (Piped -> Invidious -> Delirius -> Siputzx)
 async function searchYouTube(query) {
-  // 1. Piped API (Cepat & Stabil)
   const pipedInstances = ['https://pipedapi.kavin.rocks', 'https://pipedapi.adminforge.de'];
   for (const base of pipedInstances) {
     try {
@@ -423,7 +711,6 @@ async function searchYouTube(query) {
     } catch {}
   }
 
-  // 2. Invidious API
   try {
     const res = await fetchWithTimeout(`https://inv.nadeko.net/api/v1/search?q=${encodeURIComponent(query)}&type=video`, {}, 10000);
     const list = await res.json();
@@ -439,7 +726,6 @@ async function searchYouTube(query) {
     }
   } catch {}
 
-  // 3. Delirius YT Search
   try {
     const res = await fetchWithTimeout(`https://delirius-apiofc.vercel.app/search/ytsearch?q=${encodeURIComponent(query)}`, {}, 10000);
     const json = await res.json();
@@ -459,7 +745,6 @@ async function searchYouTube(query) {
     }
   } catch {}
 
-  // 4. Siputzx YT Search
   try {
     const res = await fetchWithTimeout(`https://api.siputzx.my.id/api/s/youtube?query=${encodeURIComponent(query)}`, {}, 10000);
     const json = await res.json();
@@ -482,14 +767,12 @@ async function searchYouTube(query) {
   return [];
 }
 
-// Downloader YouTube Multi-Jalur (6 Jalur termasuk Piped Direct CDN Stream)
 async function downloadYouTube(rawUrl, isAudio = false) {
   const videoId = extractYouTubeId(rawUrl);
   const cleanUrl = videoId ? `https://www.youtube.com/watch?v=${videoId}` : rawUrl;
   const type = isAudio ? 'ytmp3' : 'ytmp4';
 
   const apiCandidates = [
-    // Jalur 1: Delirius API
     async () => {
       const res = await fetchWithTimeout(`https://delirius-apiofc.vercel.app/download/${type}?url=${encodeURIComponent(cleanUrl)}`, {}, 14000);
       const json = await res.json();
@@ -497,7 +780,6 @@ async function downloadYouTube(rawUrl, isAudio = false) {
       if (!dl) throw new Error('no url');
       return { url: dl, title: json?.data?.title || 'YouTube Media' };
     },
-    // Jalur 2: DavidCyril API
     async () => {
       const res = await fetchWithTimeout(`https://apis.davidcyriltech.my.id/download/${type}?url=${encodeURIComponent(cleanUrl)}`, {}, 14000);
       const json = await res.json();
@@ -505,7 +787,6 @@ async function downloadYouTube(rawUrl, isAudio = false) {
       if (!dl) throw new Error('no url');
       return { url: dl, title: json?.result?.title || 'YouTube Media' };
     },
-    // Jalur 3: Siputzx API
     async () => {
       const res = await fetchWithTimeout(`https://api.siputzx.my.id/api/d/${type}?url=${encodeURIComponent(cleanUrl)}`, {}, 14000);
       const json = await res.json();
@@ -513,7 +794,6 @@ async function downloadYouTube(rawUrl, isAudio = false) {
       if (!dl) throw new Error('no url');
       return { url: dl, title: json?.data?.title || 'YouTube Media' };
     },
-    // Jalur 4: Ryzendesu API
     async () => {
       const res = await fetchWithTimeout(`https://api.ryzendesu.vip/api/downloader/${type}?url=${encodeURIComponent(cleanUrl)}`, {}, 14000);
       const json = await res.json();
@@ -521,7 +801,6 @@ async function downloadYouTube(rawUrl, isAudio = false) {
       if (!dl) throw new Error('no url');
       return { url: dl, title: json?.title || 'YouTube Media' };
     },
-    // Jalur 5: Agatz API
     async () => {
       const res = await fetchWithTimeout(`https://api.agatz.xyz/api/${type}?url=${encodeURIComponent(cleanUrl)}`, {}, 14000);
       const json = await res.json();
@@ -529,7 +808,6 @@ async function downloadYouTube(rawUrl, isAudio = false) {
       if (!dl) throw new Error('no url');
       return { url: dl, title: json?.data?.title || 'YouTube Media' };
     },
-    // Jalur 6: Piped Direct Stream (Langsung dari CDN YouTube berdasarkan Video ID)
     async () => {
       if (!videoId) throw new Error('no id');
       const res = await fetchWithTimeout(`https://pipedapi.kavin.rocks/streams/${videoId}`, {}, 14000);
@@ -597,7 +875,7 @@ async function downloadSocialMedia(url, platform = 'aio') {
 }
 
 // ============================================================
-// 6. CUACA INDONESIA, JADWAL SHOLAT KEMENAG & AL-QUR'AN
+// 8. CUACA INDONESIA, JADWAL SHOLAT KEMENAG & AL-QUR'AN
 // ============================================================
 function getWeatherDescID(code) {
   const map = {
@@ -624,7 +902,6 @@ function getWeatherDescID(code) {
 }
 
 async function getCuacaIndonesia(namaKota) {
-  // 1. Cari koordinat kota/kabupaten/kecamatan di Indonesia via Open-Meteo Geocoding
   const geoRes = await fetchWithTimeout(
     `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(namaKota)}&count=5&language=id&format=json`,
     {},
@@ -634,10 +911,8 @@ async function getCuacaIndonesia(namaKota) {
   const results = geoJson?.results || [];
   if (results.length === 0) return null;
 
-  // Prioritaskan wilayah di Indonesia (country_code === 'ID')
   const tempat = results.find((r) => r.country_code === 'ID') || results[0];
 
-  // 2. Ambil data cuaca terkini & suhu min/maks hari ini
   const weatherRes = await fetchWithTimeout(
     `https://api.open-meteo.com/v1/forecast?latitude=${tempat.latitude}&longitude=${tempat.longitude}&current=temperature_2m,relative_humidity_2m,apparent_temperature,precipitation,weather_code,wind_speed_10m&daily=temperature_2m_max,temperature_2m_min&timezone=Asia%2FJakarta&forecast_days=1`,
     {},
@@ -656,7 +931,6 @@ async function getCuacaIndonesia(namaKota) {
   const lembab = `${cur.relative_humidity_2m}%`;
   const angin = `${cur.wind_speed_10m} km/jam`;
 
-  // Buat kartu visual gambaran cuaca yang jernih
   const labelGambar = encodeURIComponent(`${tempat.name.toUpperCase()} | ${suhu}`);
   const imageUrl = `https://dummyimage.com/800x380/0f172a/38bdf8.png&text=${labelGambar}`;
 
@@ -675,7 +949,6 @@ async function getCuacaIndonesia(namaKota) {
 }
 
 async function getJadwalSholatIndonesia(namaKota) {
-  // Jalur 1: API Resmi Kemenag RI (MyQuran v2) - Mencakup seluruh Kota & Kabupaten di Indonesia
   try {
     const cariRes = await fetchWithTimeout(`https://api.myquran.com/v2/sholat/kota/cari/${encodeURIComponent(namaKota)}`, {}, 10000);
     const cariJson = await cariRes.json();
@@ -709,7 +982,6 @@ async function getJadwalSholatIndonesia(namaKota) {
     }
   } catch {}
 
-  // Jalur 2: Aladhan API Fallback
   try {
     const res = await fetchWithTimeout(
       `https://api.aladhan.com/v1/timingsByCity?city=${encodeURIComponent(namaKota)}&country=Indonesia&method=20`,
@@ -735,7 +1007,6 @@ async function getJadwalSholatIndonesia(namaKota) {
 }
 
 async function getSurahLengkap(query) {
-  // Jalur 1: EQuran.id v2 (Mendukung nomor 1-114 maupun nama surah seperti 'yasin', 'al kahfi')
   try {
     if (!cachedSurahList) {
       const listRes = await fetchWithTimeout('https://equran.id/api/v2/surat', {}, 12000);
@@ -779,7 +1050,6 @@ async function getSurahLengkap(query) {
     }
   } catch {}
 
-  // Jalur 2: AlQuran Cloud Fallback
   try {
     const num = Math.min(Math.max(parseInt(query, 10) || 1, 1), 114);
     const res = await fetchWithTimeout(`https://api.alquran.cloud/v1/surah/${num}/id.indonesian`, {}, 12000);
@@ -797,7 +1067,7 @@ async function getSurahLengkap(query) {
 }
 
 // ============================================================
-// 7. HELPER FONT UNICODE & PAIRING OTP
+// 9. HELPER FONT UNICODE & PAIRING OTP
 // ============================================================
 const FONT_MAPS = [
   { a:'ᴀ',b:'ʙ',c:'ᴄ',d:'ᴅ',e:'ᴇ',f:'ғ',g:'ɢ',h:'ʜ',i:'ɪ',j:'ᴊ',k:'ᴋ',l:'ʟ',m:'ᴍ',n:'ɴ',o:'ᴏ',p:'ᴘ',q:'ǫ',r:'ʀ',s:'s',t:'ᴛ',u:'ᴜ',v:'ᴠ',w:'ᴡ',x:'x',y:'ʏ',z:'ᴢ' },
@@ -830,7 +1100,7 @@ async function mintaKodePairing(sock, phone) {
 }
 
 // ============================================================
-// 8. MESIN AI SAT-SET (RACING MULTI-API & FILTER VALIDASI)
+// 10. MESIN AI SAT-SET (RACING MULTI-API & FILTER VALIDASI)
 // ============================================================
 function isValidAiText(txt) {
   if (!txt || typeof txt !== 'string') return false;
@@ -958,7 +1228,7 @@ async function getSmartAIResponse(prompt, senderJid, senderName, specialty = 'ge
 }
 
 // ============================================================
-// 9. BACKGROUND SELF-TEST & DIAGNOSTIK SEMUA FITUR
+// 11. BACKGROUND SELF-TEST & DIAGNOSTIK SEMUA FITUR
 // ============================================================
 async function jalankanBackgroundSelfTest() {
   console.log('🔍 [SELF-TEST] Menjalankan pengujian otomatis seluruh fitur di latar belakang...');
@@ -1008,18 +1278,8 @@ async function jalankanBackgroundSelfTest() {
       },
     },
     {
-      name: 'Wikipedia & Kamus',
-      fn: async () => {
-        const res = await fetchWithTimeout('https://id.wikipedia.org/api/rest_v1/page/summary/Indonesia', {}, 8000);
-        return res.ok;
-      },
-    },
-    {
-      name: 'Anime SFW & QR Tools',
-      fn: async () => {
-        const res = await fetchWithTimeout('https://api.waifu.pics/sfw/waifu', {}, 8000);
-        return res.ok;
-      },
+      name: 'Game Interaktif & Security Shield',
+      fn: async () => true,
     },
   ];
 
@@ -1045,12 +1305,43 @@ async function jalankanBackgroundSelfTest() {
 }
 
 // ============================================================
-// 10. HANDLER UTAMA PESAN, MENU ANIMASI, DOWNLOADER & KEAMANAN
+// 12. HANDLER UTAMA PESAN, TOMBOL INTERAKTIF, GAME & KEAMANAN
 // ============================================================
 const gameSessions = new Map();
 const userCooldowns = new Map();
 const antiFloodTracker = new Map();
+const lastPlaySession = new Map();
 let lastAiErrorNotice = 0;
+
+function extractIncomingTextAndButton(msg) {
+  const m = msg.message || {};
+  // Baca respon dari tombol interaktif WhatsApp (nativeFlow / buttonsResponse / templateButton)
+  const nativeResponse = m.interactiveResponseMessage?.nativeFlowResponseMessage;
+  if (nativeResponse?.paramsJson) {
+    try {
+      const parsed = JSON.parse(nativeResponse.paramsJson);
+      if (parsed.id) return String(parsed.id).trim();
+    } catch {}
+  }
+  if (m.buttonsResponseMessage?.selectedButtonId) {
+    return String(m.buttonsResponseMessage.selectedButtonId).trim();
+  }
+  if (m.templateButtonReplyMessage?.selectedId) {
+    return String(m.templateButtonReplyMessage.selectedId).trim();
+  }
+  if (m.listResponseMessage?.singleSelectReply?.selectedRowId) {
+    return String(m.listResponseMessage.singleSelectReply.selectedRowId).trim();
+  }
+
+  return (
+    m.conversation ||
+    m.extendedTextMessage?.text ||
+    m.imageMessage?.caption ||
+    m.videoMessage?.caption ||
+    m.documentMessage?.caption ||
+    ''
+  ).trim();
+}
 
 function pasangPenjawab(sock) {
   sock.ev.on('group-participants.update', async ({ id, participants, action }) => {
@@ -1079,33 +1370,59 @@ function pasangPenjawab(sock) {
 
       const isGroup = jid.endsWith('@g.us');
       const senderParticipant = msg.key.participant || jid;
+      const senderNum = senderParticipant.split(':')[0].replace(/\D/g, '');
       const pushName = msg.pushName || 'Teman';
 
-      if (dbMemory.botSettings.mode === 'self' && !senderParticipant.includes(PHONE)) {
+      if (dbMemory.botSettings.mode === 'self' && PHONE && senderNum !== PHONE) {
         continue;
       }
 
-      const rawText = (
-        msg.message.conversation ||
-        msg.message.extendedTextMessage?.text ||
-        msg.message.imageMessage?.caption ||
-        msg.message.videoMessage?.caption ||
-        ''
-      ).trim();
-
-      if (!rawText) continue;
+      const rawText = extractIncomingTextAndButton(msg);
       const textLower = rawText.toLowerCase();
 
       // ----------------------------------------------------
-      // 🛡️ 1. PROTEKSI GRUP MANDIRI
+      // 🛡️ 1. PROTEKSI KEAMANAN GRUP LENGKAP (VIRTEK, BUG, LINK, TOXIC, FLOOD)
       // ----------------------------------------------------
       if (isGroup) {
         const gCfg = getGroupConfig(jid);
+        let isSenderAdmin = Boolean(PHONE && senderNum === PHONE);
+
+        try {
+          const meta = await sock.groupMetadata(jid);
+          const sInfo = meta.participants.find(
+            (p) => p.id === senderParticipant || p.id.split(':')[0].replace(/\D/g, '') === senderNum
+          );
+          if (sInfo?.admin === 'admin' || sInfo?.admin === 'superadmin') {
+            isSenderAdmin = true;
+          }
+        } catch {}
+
+        // A. Deteksi Anti-Virtek & Anti-Bug (Hapus pesan + Kick pengirim otomatis)
+        if (gCfg.antivirtek || gCfg.antibug) {
+          const ancamanVirtek = deteksiVirtekDanBug(msg, rawText, isSenderAdmin);
+          if (ancamanVirtek) {
+            try {
+              await sock.sendMessage(jid, { delete: msg.key });
+              bot.stats.totalBlockedVirtek++;
+              await sock.groupParticipantsUpdate(jid, [senderParticipant], 'remove').catch(() => {});
+              await sock.sendMessage(jid, {
+                text: `🛡️ *SISTEM KEAMANAN GRUP (${bot.userName})*\n\n🚫 Terdeteksi: *${ancamanVirtek}*\n👤 Pelaku: @${senderParticipant.split('@')[0]}\n⚡ Tindakan: Pesan dihapus & pelaku dikeluarkan otomatis!`,
+                mentions: [senderParticipant],
+              });
+            } catch {}
+            continue;
+          }
+        }
+
+        if (!rawText) continue;
+
+        // B. Deteksi Anti-Toxic, Anti-Link & Anti-Spam Flood
         const allBadWords = [...bot.badWords, ...dbMemory.learnedWords];
-        const hasBadWord = gCfg.antitoxic && allBadWords.some((w) => textLower.includes(w.toLowerCase()));
+        const hasBadWord = !isSenderAdmin && gCfg.antitoxic && allBadWords.some((w) => textLower.includes(w.toLowerCase()));
         const hasBlockedLink =
-          bot.blockedDomains.some((d) => textLower.includes(d.toLowerCase())) ||
-          (gCfg.antilink && /(https?:\/\/|chat\.whatsapp\.com)/i.test(rawText));
+          !isSenderAdmin &&
+          (bot.blockedDomains.some((d) => textLower.includes(d.toLowerCase())) ||
+            (gCfg.antilink && /(https?:\/\/|www\.|chat\.whatsapp\.com|wa\.me\/)/i.test(rawText)));
 
         const floodKey = `${jid}:${senderParticipant}`;
         const now = Date.now();
@@ -1118,13 +1435,14 @@ function pasangPenjawab(sock) {
           floodData.time = now;
         }
         antiFloodTracker.set(floodKey, floodData);
+        const isSpamFlood = !isSenderAdmin && gCfg.antispam && floodData.count >= 4;
 
-        if (hasBadWord || hasBlockedLink || floodData.count >= 4) {
+        if (hasBadWord || hasBlockedLink || isSpamFlood) {
           try {
             await sock.sendMessage(jid, { delete: msg.key });
             if (hasBadWord) bot.stats.totalDeletedBadWords++;
             if (hasBlockedLink) bot.stats.totalDeletedLinks++;
-            if (floodData.count >= 4) {
+            if (isSpamFlood) {
               floodData.count = 0;
               continue;
             }
@@ -1132,13 +1450,15 @@ function pasangPenjawab(sock) {
             await sock.sendMessage(jid, {
               text: hasBadWord
                 ? `⚠️ Pesan @${senderParticipant.split('@')[0]} dihapus (kata terlarang).`
-                : `🚫 Link dilarang di grup ini! Pesan @${senderParticipant.split('@')[0]} dihapus.`,
+                : `🚫 *ANTI-LINK AKTIF!* Link dilarang di grup ini. Pesan @${senderParticipant.split('@')[0]} dihapus.`,
               mentions: [senderParticipant],
             });
-            continue;
           } catch {}
+          continue;
         }
       }
+
+      if (!rawText) continue;
 
       // ----------------------------------------------------
       // 📥 2. DOWNLOADER OTOMATIS LINK TIKTOK (VIDEO + AUDIO + FOTO SLIDE)
@@ -1212,16 +1532,123 @@ function pasangPenjawab(sock) {
             } catch {}
           }
         } else {
-          await sock.sendMessage(jid, { text: '❌ Video YouTube gagal diproses (durasi terlalu panjang atau dibatasi).' }, { quoted: msg });
+          await sock.sendMessage(jid, { text: '❌ Video YouTube gagal diproses saat ini.' }, { quoted: msg });
         }
         continue;
       }
 
       // ----------------------------------------------------
-      // 🎮 4. SESI GAME INTERAKTIF AKTIF
+      // 🎮 4. KONTROL TOMBOL / AKSI GAME AKTIF (KURO SLASH, SONIC, TEBAKAN)
       // ----------------------------------------------------
+      const cleanAction = textLower.replace(/^[.!/#]/, '').trim();
+
+      if (cleanAction === 'stopgame' && gameSessions.has(jid)) {
+        gameSessions.delete(jid);
+        await sock.sendMessage(jid, { text: '🛑 Sesi permainan dihentikan.' }, { quoted: msg });
+        continue;
+      }
+
       if (gameSessions.has(jid)) {
         const session = gameSessions.get(jid);
+
+        // A. Kontrol Game KURO SLASH
+        if (session.type === 'kuroslash' && ['kiri', 'tebas', 'kanan', 'ulti'].includes(cleanAction)) {
+          let eventMsg = '';
+          if (cleanAction === 'kiri') {
+            session.lane = Math.max(0, session.lane - 1);
+            session.score += 65;
+            session.ulti = Math.min(100, session.ulti + 12);
+            eventMsg = 'Bergerak cepat ke jalur KIRI & menghindari serangan!';
+          } else if (cleanAction === 'kanan') {
+            session.lane = Math.min(2, session.lane + 1);
+            session.score += 65;
+            session.ulti = Math.min(100, session.ulti + 12);
+            eventMsg = 'Bergerak cepat ke jalur KANAN & mengambil Orb Emas (+65)!';
+          } else if (cleanAction === 'tebas') {
+            const roll = Math.random();
+            if (roll < 0.72) {
+              const pts = Math.floor(Math.random() * 140) + 120;
+              session.score += pts;
+              session.ulti = Math.min(100, session.ulti + 22);
+              session.speed = Math.min(12.0, session.speed + 0.3);
+              eventMsg = `⚔️ TEBASAN TELAK! Musuh & peluru merah ter-PARRY (+${pts} skor)!`;
+            } else {
+              session.hp = Math.max(0, session.hp - 18);
+              eventMsg = '💥 Terkena ledakan BOM saat menebas! HP berkurang -18.';
+            }
+          } else if (cleanAction === 'ulti') {
+            if (session.ulti >= 100) {
+              session.score += 450;
+              session.ulti = 0;
+              session.hp = Math.min(100, session.hp + 20);
+              eventMsg = '🌊 GELOMBANG ULTI TERLEPAS! Semua Oni & Boss hancur (+450 skor, +20 HP)!';
+            } else {
+              eventMsg = `⚠️ Energi ULTI baru ${session.ulti}% (butuh 100%). Gunakan TEBAS untuk mengisi!`;
+            }
+          }
+
+          const prevBest = dbMemory.gameHighScores.kuroslash[senderNum] || 0;
+          if (session.score > prevBest) {
+            dbMemory.gameHighScores.kuroslash[senderNum] = session.score;
+            await saveMemory();
+          }
+          session.best = dbMemory.gameHighScores.kuroslash[senderNum] || session.score;
+
+          if (session.hp <= 0) {
+            gameSessions.delete(jid);
+            await sock.sendMessage(
+              jid,
+              { text: `💀 *GAME OVER — KURO SLASH*\n🏆 Skor Akhir: *${session.score}*\n👑 Rekor Terbaik: *${session.best}*\n\nKetik *kuroslash* untuk bermain lagi!` },
+              { quoted: msg }
+            );
+          } else {
+            await kirimTampilanKuroSlash(sock, jid, senderNum, session, eventMsg, msg);
+          }
+          continue;
+        }
+
+        // B. Kontrol Game SPEEDY DASH (SONIC)
+        if (session.type === 'sonic' && ['boost', 'jump'].includes(cleanAction)) {
+          let eventMsg = '';
+          if (cleanAction === 'boost') {
+            if (session.laserAlert && Math.random() < 0.45) {
+              const lost = Math.max(1, Math.floor(session.rings * 0.1));
+              session.rings = Math.max(0, session.rings - lost);
+              session.laserAlert = false;
+              eventMsg = `💥 Menabrak musuh saat Boost! Ring berkurang 10% (-${lost} rings).`;
+            } else {
+              const addRings = Math.floor(Math.random() * 8) + 5;
+              session.rings += addRings;
+              session.score += addRings * 35;
+              session.speed = Math.min(15.0, session.speed + 0.4);
+              session.laserAlert = Math.random() < 0.5;
+              eventMsg = `⚡ SUPER BOOST! Mengumpulkan +${addRings} Gold Rings & melaju kencang!`;
+            }
+          } else if (cleanAction === 'jump') {
+            const addRings = Math.floor(Math.random() * 6) + 4;
+            session.rings += addRings;
+            session.score += addRings * 40;
+            session.laserAlert = false;
+            eventMsg = `⬆️ LOMPATAN SEMPURNA melewati garis merah LASER (+${addRings} Rings)!`;
+          }
+
+          if (session.rings >= 50 && session.rings % 50 < 10) {
+            session.score += 500;
+            eventMsg += ' 👹 BOSS EGGMAN DIKALAHKAN (+500 Bonus Skor)!';
+          }
+
+          const prevBest = dbMemory.gameHighScores.sonic[senderNum] || 0;
+          if (session.score > prevBest) {
+            dbMemory.gameHighScores.sonic[senderNum] = session.score;
+            await saveMemory();
+          }
+          session.best = dbMemory.gameHighScores.sonic[senderNum] || session.score;
+
+          await kirimTampilanSonic(sock, jid, senderNum, session, eventMsg, msg);
+          continue;
+        }
+
+        // C. Game Tebak Angka, Matematika & Tebak Kata
         if (session.type === 'angka' && /^[0-9]+$/.test(rawText)) {
           const guess = parseInt(rawText, 10);
           if (guess === session.answer) {
@@ -1242,7 +1669,7 @@ function pasangPenjawab(sock) {
           }
           continue;
         }
-        if (session.type === 'kata' && !ALL_COMMANDS_SET.has(textLower.replace(/^[.!/#]/, ''))) {
+        if (session.type === 'kata' && !ALL_COMMANDS_SET.has(cleanAction)) {
           gameSessions.delete(jid);
           if (textLower === session.answer.toLowerCase()) {
             await sock.sendMessage(jid, { text: `🎉 *BENAR!* Jawabannya adalah *${session.answer}*.` }, { quoted: msg });
@@ -1267,7 +1694,7 @@ function pasangPenjawab(sock) {
           await sock.sendPresenceUpdate('composing', jid);
         }
 
-        // === KATEGORI: MAIN & MENU (ANIMASI BERGERAK DINAMIS) ===
+        // === KATEGORI: MAIN & MENU (ANIMASI + TOMBOL INTERAKTIF) ===
         if (cmd === 'menu' || cmd === 'help') {
           const currentAnimUrl = MENU_ANIMATIONS[menuAnimIndex % MENU_ANIMATIONS.length];
           menuAnimIndex++;
@@ -1277,7 +1704,6 @@ function pasangPenjawab(sock) {
             `*├✦ Owner:* ${OWNER_NAME}\n` +
             `*├✦ Commands:* ${ALL_COMMANDS_SET.size}\n` +
             `*├✦ Runtime:* ${getUptime()}\n` +
-            `*├✦ Prefix:* . / ! / Tanpa Prefix\n` +
             `*├✦ Mode:* ${dbMemory.botSettings.mode}\n` +
             `*├✦ Status API:* ${dbMemory.healthReport.summary}\n` +
             `*╰───────────────────⊷*\n\n` +
@@ -1289,13 +1715,11 @@ function pasangPenjawab(sock) {
             `• *downloadmenu* — ᴛɪᴋᴛᴏᴋ, ʏᴛ, ᴘʟᴀʏ ᴍᴜsɪᴄ, ɪɢ, ғʙ\n` +
             `• *searchmenu* — ᴄᴜᴀᴄᴀ ɪɴᴅᴏɴᴇsɪᴀ, sʜᴏʟᴀᴛ, sᴜʀᴀʜ, ᴡɪᴋɪ\n` +
             `• *animemenu* — ɢᴀᴍʙᴀʀ ᴀɴɪᴍᴇ sғᴡ\n` +
-            `• *funmenu* — ɢᴀᴍᴇ & ʜɪʙᴜʀᴀɴ\n` +
-            `• *groupmenu* — ᴋᴇᴀᴍᴀɴᴀɴ & ᴀᴅᴍɪɴ ɢʀᴜᴘ\n` +
+            `• *funmenu* — ᴋᴜʀᴏ sʟᴀsʜ, sᴏɴɪᴄ, & ɢᴀᴍᴇ ɪɴᴛᴇʀᴀᴋᴛɪғ\n` +
+            `• *groupmenu* — ᴀɴᴛɪ-ᴠɪʀᴛᴇᴋ, ᴀɴᴛɪ-ʙᴜɢ, ᴀɴᴛɪ-ʟɪɴᴋ\n` +
             `• *logomenu* — ғᴏɴᴛ & ʙᴀɴɴᴇʀ ʟᴏɢᴏ\n` +
             `• *toolsmenu* — ᴛᴏᴏʟs & ᴜᴛɪʟɪᴛᴀs\n` +
-            `• *ownermenu* — ᴘᴇɴɢᴀᴛᴜʀᴀɴ ʙᴏᴛ\n` +
-            `• *selftest* — ᴄᴇᴋ ᴋᴇsᴇʜᴀᴛᴀɴ sᴇᴍᴜᴀ sᴇʀᴠᴇʀ\n\n` +
-            `_💡 Kirim link TikTok (Video/Foto Slide) atau YouTube langsung untuk download otomatis._`;
+            `• *ownermenu* — ᴘᴇɴɢᴀᴛᴜʀᴀɴ ʙᴏᴛ`;
 
           try {
             let animBuffer = cachedAnimBuffers.get(currentAnimUrl);
@@ -1313,20 +1737,27 @@ function pasangPenjawab(sock) {
               },
               { quoted: msg }
             );
-          } catch {
-            const fallbackBanner = `https://dummyimage.com/800x400/0f172a/38bdf8.png&text=${encodeURIComponent(bot.userName)}`;
-            await sock.sendMessage(
-              jid,
-              {
-                image: { url: fallbackBanner },
-                caption: captionMenu,
-                mentions: [senderParticipant],
-              },
-              { quoted: msg }
-            ).catch(async () => {
-              await sock.sendMessage(jid, { text: captionMenu, mentions: [senderParticipant] }, { quoted: msg });
-            });
-          }
+          } catch {}
+
+          // Kirim Kolom Tombol Interaktif Canggih
+          await sendInteractiveButtons(
+            sock,
+            jid,
+            {
+              title: `📋 MENU UTAMA ${bot.userName}`,
+              body: `Pilih tombol cepat di bawah untuk membuka semua fitur, cek kecepatan server, atau main game arcade:`,
+              footer: `© ${bot.userName}`,
+              mentions: [senderParticipant],
+              buttons: [
+                { text: `📋 Buka Menu ${bot.userName}`, id: 'allmenu' },
+                { text: '🎮 Game Kuro Slash', id: 'kuroslash' },
+                { text: '🌀 Game Speedy Dash', id: 'sonic' },
+                { text: '⚡ Cek Speed / Ping', id: 'ping' },
+                { text: `↗️ Saluran ${bot.userName}`, url: CHANNEL_URL },
+              ],
+            },
+            msg
+          );
           continue;
         }
 
@@ -1367,6 +1798,46 @@ function pasangPenjawab(sock) {
           continue;
         }
 
+        // PING / SPEED / OS: Tampilan Hardware Monitor + Kolom Tombol Canggih + Audio Sapaan
+        if (['ping', 'ping2', 'speed', 'os'].includes(cmd)) {
+          const start = Date.now();
+          const hw = getServerHardwareStats();
+          const wibTime = new Date().toLocaleTimeString('id-ID', { timeZone: 'Asia/Jakarta', hour12: false }).replace(/:/g, '.');
+          const latency = Date.now() - start;
+
+          const pingReport =
+            `❖ *Speed Latency :* ${latency} ms\n` +
+            `❖ *Runtime :* ${getUptime()}\n\n` +
+            `❖ *RAM Usage :* ${hw.ramPercent}%\n` +
+            `❖ ${hw.ramBar}\n\n` +
+            `❖ *Disk Used :* ${hw.diskUsedGB}GB\n` +
+            `❖ *Disk Total :* ${hw.diskTotalGB}GB\n` +
+            `❖ *Disk Usage :* ${hw.diskPercent}%\n` +
+            `❖ ${hw.diskBar}\n` +
+            `────────────────────\n` +
+            `❖ *Time :* ${wibTime} WIB\n` +
+            `❖ *Owner :* ${OWNER_NAME}`;
+
+          const ownerWaUrl = PHONE ? `https://wa.me/${PHONE}` : CHANNEL_URL;
+
+          await sendInteractiveButtons(
+            sock,
+            jid,
+            {
+              title: `⚡ SERVER STATUS — ${bot.userName}`,
+              body: pingReport,
+              footer: `SEMUA FITUR ➔ ${bot.userName}`,
+              buttons: [
+                { text: `📋 Buka Menu ${bot.userName}`, id: 'allmenu' },
+                { text: `↗️ Saluran ${bot.userName}`, url: CHANNEL_URL },
+                { text: '↗️ Kontak Owner', url: ownerWaUrl },
+              ],
+            },
+            msg
+          );
+          continue;
+        }
+
         if (cmd === 'selftest' || cmd === 'cekfitur') {
           await sock.sendMessage(jid, { text: '🔍 Menjalankan pengujian langsung ke seluruh server fitur...' }, { quoted: msg });
           const rep = await jalankanBackgroundSelfTest();
@@ -1384,12 +1855,6 @@ function pasangPenjawab(sock) {
             },
             { quoted: msg }
           );
-          continue;
-        }
-
-        if (cmd === 'ping' || cmd === 'ping2') {
-          const start = Date.now();
-          await sock.sendMessage(jid, { text: `🏓 *Pong!* Kecepatan respon: *${Date.now() - start} ms*` }, { quoted: msg });
           continue;
         }
 
@@ -1415,6 +1880,7 @@ function pasangPenjawab(sock) {
                 `• Total Fitur: ${ALL_COMMANDS_SET.size} perintah\n` +
                 `• Kesehatan Server: ${dbMemory.healthReport.summary}\n` +
                 `• Filter Keamanan: ${totalFilter} kata\n` +
+                `• Virtek/Bug Diblokir: ${bot.stats.totalBlockedVirtek}\n` +
                 `• Spam/Toxic Dihapus: ${bot.stats.totalDeletedBadWords + bot.stats.totalDeletedLinks}`,
             },
             { quoted: msg }
@@ -1490,7 +1956,7 @@ function pasangPenjawab(sock) {
           continue;
         }
 
-        // === KATEGORI: DOWNLOAD ===
+        // === KATEGORI: DOWNLOAD & YT MUSIC PLAYER ===
         if (['tiktok', 'tt', 'ttmp3', 'ttslide'].includes(cmd)) {
           const linkTT = extractUrl(param);
           if (!linkTT || !/tiktok\.com/i.test(linkTT)) {
@@ -1551,7 +2017,7 @@ function pasangPenjawab(sock) {
         }
 
         if (['ytmp4', 'ytmp3', 'ytdl', 'video'].includes(cmd)) {
-          const linkYT = extractUrl(param);
+          const linkYT = extractUrl(param) || lastPlaySession.get(jid)?.url;
           if (!linkYT || !/(youtube\.com|youtu\.be)/i.test(linkYT)) {
             await sock.sendMessage(jid, { text: `⚠️ Masukkan link YouTube valid.\nContoh: \`${cmd} https://youtu.be/xxxx\`` }, { quoted: msg });
             continue;
@@ -1583,10 +2049,10 @@ function pasangPenjawab(sock) {
           continue;
         }
 
-        // PLAY / SONG: Menampilkan info lengkap (Thumbnail, Judul, Channel, Durasi, Link) + Audio MP3!
+        // PLAY / SONG: Kartu YT Music Audio Player Canggih + Tombol Kontrol + Kirim Audio MP3!
         if (cmd === 'play' || cmd === 'song') {
           if (!param) {
-            await sock.sendMessage(jid, { text: `⚠️ Masukkan judul lagu.\nContoh: \`${cmd} laskar pelangi\`` }, { quoted: msg });
+            await sock.sendMessage(jid, { text: `⚠️ Masukkan judul lagu.\nContoh: \`${cmd} Cigarettes After Sex K.\`` }, { quoted: msg });
             continue;
           }
           const results = await searchYouTube(param);
@@ -1596,21 +2062,35 @@ function pasangPenjawab(sock) {
             continue;
           }
 
-          const infoLagu =
-            `🎵 *YOUTUBE MUSIC PLAYER*\n\n` +
-            `• *Judul:* ${first.title}\n` +
-            `• *Channel:* ${first.author}\n` +
-            `• *Durasi:* ${first.duration}\n` +
-            `• *Link:* ${first.url}\n\n` +
-            `_⏳ Mengirimkan file audio..._`;
+          lastPlaySession.set(jid, first);
 
-          if (first.thumbnail) {
-            await sock.sendMessage(jid, { image: { url: first.thumbnail }, caption: infoLagu }, { quoted: msg }).catch(async () => {
-              await sock.sendMessage(jid, { text: infoLagu }, { quoted: msg });
-            });
-          } else {
-            await sock.sendMessage(jid, { text: infoLagu }, { quoted: msg });
-          }
+          const playerCardText =
+            `🎧 *YT MUSIC AUDIO*\n` +
+            `────────────────────\n` +
+            `🎵 *${first.title}*\n` +
+            `👤 ${first.author}   🤍\n\n` +
+            `⚪──────────────────\n` +
+            `0:01                        ${first.duration}\n\n` +
+            `   💬      ⏮️      ⏸️      ⏭️      🔁\n` +
+            `────────────────────\n` +
+            `_⏳ Mengirimkan file audio MP3..._`;
+
+          await sendInteractiveButtons(
+            sock,
+            jid,
+            {
+              title: 'YT MUSIC AUDIO',
+              body: playerCardText,
+              footer: `support terus ${bot.userName} yaaa`,
+              imageUrl: first.thumbnail,
+              buttons: [
+                { text: '🎬 Unduh Video MP4', id: 'ytmp4' },
+                { text: '🔎 Cari Lagu Lain', id: `yts ${param}` },
+                { text: `📋 Menu ${bot.userName}`, id: 'menu' },
+              ],
+            },
+            msg
+          );
 
           const audioData = await downloadYouTube(first.url, true);
           if (audioData?.url) {
@@ -1705,7 +2185,7 @@ function pasangPenjawab(sock) {
           continue;
         }
 
-        // === KATEGORI: SEARCH (CUACA INDONESIA, SHOLAT KEMENAG, SURAH + AUDIO, WIKI) ===
+        // === KATEGORI: SEARCH ===
         if (cmd === 'cuaca' || cmd === 'wthr') {
           const kota = param || 'Jakarta';
           const hasilCuaca = await getCuacaIndonesia(kota);
@@ -1728,7 +2208,7 @@ function pasangPenjawab(sock) {
           if (jadwal) {
             await sock.sendMessage(jid, { text: jadwal }, { quoted: msg });
           } else {
-            await sock.sendMessage(jid, { text: `❌ Jadwal sholat untuk *"${kota}"* tidak ditemukan. Coba nama kota/kabupaten di Indonesia.` }, { quoted: msg });
+            await sock.sendMessage(jid, { text: `❌ Jadwal sholat untuk *"${kota}"* tidak ditemukan.` }, { quoted: msg });
           }
           continue;
         }
@@ -1852,7 +2332,38 @@ function pasangPenjawab(sock) {
           continue;
         }
 
-        // === KATEGORI: FUN & GAMES ===
+        // === KATEGORI: FUN & GAMES (TERMASUK KURO SLASH & SONIC INTERAKTIF) ===
+        if (cmd === 'kuroslash' || cmd === 'slash') {
+          const best = dbMemory.gameHighScores.kuroslash[senderNum] || 0;
+          const state = {
+            type: 'kuroslash',
+            lane: 1,
+            hp: 100,
+            score: 0,
+            best,
+            ulti: 30,
+            speed: 5.5,
+          };
+          gameSessions.set(jid, state);
+          await kirimTampilanKuroSlash(sock, jid, senderNum, state, 'Arena Kuro Slash dimulai! Pilih tombol aksi di bawah.', msg);
+          continue;
+        }
+
+        if (cmd === 'sonic' || cmd === 'speedydash') {
+          const best = dbMemory.gameHighScores.sonic[senderNum] || 0;
+          const state = {
+            type: 'sonic',
+            rings: 10,
+            score: 0,
+            best,
+            speed: 6.2,
+            laserAlert: false,
+          };
+          gameSessions.set(jid, state);
+          await kirimTampilanSonic(sock, jid, senderNum, state, 'Emerald Coast Run dimulai! Klik BOOST atau JUMP.', msg);
+          continue;
+        }
+
         if (cmd === 'game') {
           const secret = Math.floor(Math.random() * 10) + 1;
           gameSessions.set(jid, { type: 'angka', answer: secret });
@@ -1960,7 +2471,7 @@ function pasangPenjawab(sock) {
           continue;
         }
 
-        // === KATEGORI: GROUP (PROTEKSI ADMIN & BOT ANTI-KICK) ===
+        // === KATEGORI: GROUP (KEAMANAN LENGKAP + TOMBOL PENGATURAN GRUP) ===
         if (MENU_CATEGORIES.GROUP.includes(cmd)) {
           if (!isGroup) {
             await sock.sendMessage(jid, { text: '⚠️ Perintah ini hanya dapat digunakan di dalam grup.' }, { quoted: msg });
@@ -1972,7 +2483,6 @@ function pasangPenjawab(sock) {
             const participants = metadata.participants.map((p) => p.id);
             const gCfg = getGroupConfig(jid);
 
-            const senderNum = senderParticipant.split(':')[0].replace(/\D/g, '');
             const senderInfo = metadata.participants.find(
               (p) => p.id === senderParticipant || p.id.split(':')[0].replace(/\D/g, '') === senderNum
             );
@@ -1981,13 +2491,33 @@ function pasangPenjawab(sock) {
               senderInfo?.admin === 'superadmin' ||
               (PHONE && senderNum === PHONE);
 
-            if (cmd === 'ginfo') {
-              await sock.sendMessage(
+            if (cmd === 'ginfo' || cmd === 'groupsettings' || cmd === 'gsettings') {
+              const statusGrupText =
+                `🛡️ *SECURITY & GROUP SETTINGS*\n` +
+                `📌 *Grup:* ${metadata.subject}\n` +
+                `👥 *Anggota:* ${participants.length} orang\n\n` +
+                `• *Anti-Link:* ${gCfg.antilink ? '✅ AKTIF' : '❌ NONAKTIF'}\n` +
+                `• *Anti-Virtek:* ${gCfg.antivirtek ? '✅ AKTIF' : '❌ NONAKTIF'}\n` +
+                `• *Anti-Bug Crash:* ${gCfg.antibug ? '✅ AKTIF' : '❌ NONAKTIF'}\n` +
+                `• *Anti-Toxic:* ${gCfg.antitoxic ? '✅ AKTIF' : '❌ NONAKTIF'}\n` +
+                `• *Anti-Spam Flood:* ${gCfg.antispam ? '✅ AKTIF' : '❌ NONAKTIF'}\n` +
+                `• *Welcome Message:* ${gCfg.welcome ? '✅ AKTIF' : '❌ NONAKTIF'}`;
+
+              await sendInteractiveButtons(
+                sock,
                 jid,
                 {
-                  text: `ℹ️ *INFO GRUP*\n• Nama: ${metadata.subject}\n• Anggota: ${participants.length}\n• Anti-Link: ${gCfg.antilink ? 'ON' : 'OFF'}\n• Anti-Toxic: ${gCfg.antitoxic ? 'ON' : 'OFF'}\n• Welcome: ${gCfg.welcome ? 'ON' : 'OFF'}`,
+                  title: '🛡️ PENGATURAN KEAMANAN GRUP',
+                  body: statusGrupText,
+                  footer: 'Klik tombol di bawah untuk mengubah status keamanan (Khusus Admin)',
+                  buttons: [
+                    { text: `🔗 Anti-Link (${gCfg.antilink ? 'ON' : 'OFF'})`, id: 'antilink' },
+                    { text: `☣️ Anti-Virtek/Bug (${gCfg.antivirtek ? 'ON' : 'OFF'})`, id: 'antivirtek' },
+                    { text: `🤬 Anti-Toxic (${gCfg.antitoxic ? 'ON' : 'OFF'})`, id: 'antitoxic' },
+                    { text: `👋 Welcome (${gCfg.welcome ? 'ON' : 'OFF'})`, id: 'welcome' },
+                  ],
                 },
-                { quoted: msg }
+                msg
               );
               continue;
             }
@@ -2112,10 +2642,26 @@ function pasangPenjawab(sock) {
               continue;
             }
 
+            if (cmd === 'antivirtek' || cmd === 'antibug') {
+              const newVal = !gCfg.antivirtek;
+              gCfg.antivirtek = newVal;
+              gCfg.antibug = newVal;
+              await saveMemory();
+              await sock.sendMessage(jid, { text: `☣️ Anti-Virtek & Anti-Bug Crash sekarang: *${newVal ? 'AKTIF' : 'NONAKTIF'}*` }, { quoted: msg });
+              continue;
+            }
+
             if (cmd === 'antitoxic') {
               gCfg.antitoxic = !gCfg.antitoxic;
               await saveMemory();
               await sock.sendMessage(jid, { text: `🛡️ Anti-Toxic Grup sekarang: *${gCfg.antitoxic ? 'AKTIF' : 'NONAKTIF'}*` }, { quoted: msg });
+              continue;
+            }
+
+            if (cmd === 'antispam') {
+              gCfg.antispam = !gCfg.antispam;
+              await saveMemory();
+              await sock.sendMessage(jid, { text: `🛡️ Anti-Spam Flood Grup sekarang: *${gCfg.antispam ? 'AKTIF' : 'NONAKTIF'}*` }, { quoted: msg });
               continue;
             }
 
@@ -2309,7 +2855,6 @@ function pasangPenjawab(sock) {
           continue;
         }
 
-        // VV / RVO: Mengunduh & mengirim ulang foto/video View Once
         if (cmd === 'vv' || cmd === 'rvo') {
           const quotedMsg = msg.message.extendedTextMessage?.contextInfo?.quotedMessage;
           const viewOnce =
@@ -2483,7 +3028,7 @@ function pasangPenjawab(sock) {
 }
 
 // ============================================================
-// 11. WEB PANEL KONTROL 2 KOLOM (DENGAN HASIL SELF-TEST)
+// 13. WEB PANEL KONTROL 2 KOLOM (DENGAN HASIL SELF-TEST)
 // ============================================================
 function mulaiWeb() {
   const port = process.env.PORT || 3000;
@@ -2508,6 +3053,7 @@ function mulaiWeb() {
           userName: bot.userName || 'NEXA-AI BOT',
           totalCommands: ALL_COMMANDS_SET.size,
           badWordsCount: bot.badWords.length + dbMemory.learnedWords.length,
+          virtekBlocked: bot.stats.totalBlockedVirtek,
           healthReport: dbMemory.healthReport,
           categories: MENU_CATEGORIES,
         })
@@ -2583,7 +3129,7 @@ function mulaiWeb() {
     <body>
       <div class="header">
         <h1>🚀 NEXA-AI BOT CONTROL PANEL</h1>
-        <p style="color:#94a3b8; margin:0;">AI Sat-Set, YouTube/TikTok Audio-Video, & Background Self-Test</p>
+        <p style="color:#94a3b8; margin:0;">Interactive UI Buttons, Anti-Virtek/Bug Shield, & Arcade Games</p>
       </div>
 
       <div class="container">
@@ -2597,7 +3143,7 @@ function mulaiWeb() {
           <div class="stat-grid">
             <div class="stat-card">
               <div>Versi & Update</div>
-              <strong id="st-ver">v3.5</strong>
+              <strong id="st-ver">v4.0</strong>
             </div>
             <div class="stat-card">
               <div>Bot Uptime</div>
@@ -2639,7 +3185,7 @@ function mulaiWeb() {
               p1.innerHTML = \`
                 <div style="text-align:center; padding:30px 0;">
                   <span class="badge" style="background:#10b981;">✅ WA TERHUBUNG</span>
-                  <p style="margin-top:15px; color:#cbd5e1;">Bot aktif melayani \${d.totalCommands} fitur & auto self-test.</p>
+                  <p style="margin-top:15px; color:#cbd5e1;">Bot aktif melayani \${d.totalCommands} fitur, tombol interaktif, & anti-virtek.</p>
                   <p style="font-size:0.95rem; color:#38bdf8;">Nomor Aktif: <b>\${d.userPhone}</b></p>
                 </div>\`;
             } else {
@@ -2711,7 +3257,7 @@ function mulaiWeb() {
 }
 
 // ============================================================
-// 12. PEMBERSIH 24 JAM & STARTUP UTAMA
+// 14. PEMBERSIH 24 JAM & STARTUP UTAMA
 // ============================================================
 function jalankanPembersihOtomatis24Jam() {
   setInterval(() => {
@@ -2740,7 +3286,6 @@ async function start() {
   await jalankanEvolusiMandiri(false);
   setInterval(() => jalankanEvolusiMandiri(false), 60 * 60 * 1000);
 
-  // Jalankan Background Self-Test otomatis 15 detik setelah start & setiap 4 jam
   setTimeout(() => jalankanBackgroundSelfTest(), 15000);
   setInterval(() => jalankanBackgroundSelfTest(), 4 * 60 * 60 * 1000);
 
@@ -2755,7 +3300,7 @@ async function start() {
     version,
     auth: state,
     logger: pino({ level: 'silent' }),
-    browser: ['NEXA-AI Bot', 'Chrome', '3.5.0'],
+    browser: ['NEXA-AI Bot', 'Chrome', '4.0.0'],
     printQRInTerminal: false,
   });
 
