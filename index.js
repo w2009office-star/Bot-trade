@@ -1,11 +1,3 @@
-import {
-  GROUP_AUTO_COMMANDS,
-  handleGroupParticipantsUpdate,
-  handleGroupJoinRequestEvent,
-  startGroupAutomationScheduler,
-  handleGroupAutomationCommand,
-  handleGroupThemeInteraction,
-} from './group_automation.js';
 import fs from 'fs';
 import fsPromises from 'fs/promises';
 import path from 'path';
@@ -36,6 +28,7 @@ import {
   handleGroupJoinRequestEvent,
   startGroupAutomationScheduler,
   handleGroupAutomationCommand,
+  handleGroupThemeInteraction,
 } from './group_automation.js';
 
 import {
@@ -148,7 +141,7 @@ const bot = {
 };
 
 let dbMemory = {
-  version: 9.4,
+  version: 9.5,
   lastUpdateDate: '',
   updateLogs: [],
   users: {},
@@ -157,7 +150,7 @@ let dbMemory = {
   groupSettings: {},
   gameHighScores: { kuroslash: {}, sonic: {} },
   botSettings: { mode: 'public', autoread: false, autotyping: true, customBotName: '' },
-  healthReport: { lastChecked: '-', summary: '209/209 Fitur Valid + Spotify Live + Group Automation', details: {}, autoRepairs: [], totalRepairs: 0 },
+  healthReport: { lastChecked: '-', summary: '209/209 Fitur Valid + Spotify Live + Group Theme Interaction', details: {}, autoRepairs: [], totalRepairs: 0 },
 };
 
 async function loadMemory() {
@@ -194,7 +187,7 @@ async function jalankanEvolusiMandiri(paksaManual = false) {
   serverAutoHeal.updateProgressText = '🔄 SEDANG UPDATE SISTEM DI LAYAR BELAKANG...';
   dbMemory.version = Number((dbMemory.version + 0.1).toFixed(1));
   dbMemory.lastUpdateDate = hariIni;
-  const log = `v${dbMemory.version} (${hariIni}): 209 Fitur Valid + Spotify Live + Group Automation + GitHub Persistent Session.`;
+  const log = `v${dbMemory.version} (${hariIni}): 209 Fitur Valid + Spotify Live + Group Theme Interaction + GitHub Persistent Session.`;
   dbMemory.updateLogs.unshift(log);
   await saveMemory();
   serverAutoHeal.isUpdating = false;
@@ -417,7 +410,7 @@ async function prosesSatuPesan(sock, msg) {
     if (ALL_COMMANDS_SET.has(cmd)) {
       if (dbMemory.botSettings.autotyping) sock.sendPresenceUpdate('composing', jid).catch(() => {});
 
-      // HANDLER OTOMATISASI GRUP (Welcome, Goodbye, Buka/Tutup, Kegiatan, Filter & ACC Member)
+      // HANDLER OTOMATISASI GRUP (Welcome, Goodbye, Buka/Tutup, Kegiatan, Interaksi Tema, Filter & ACC Member)
       const handledGroupAuto = await handleGroupAutomationCommand({
         sock,
         jid,
@@ -496,7 +489,7 @@ async function prosesSatuPesan(sock, msg) {
               {
                 title: '⚙️ GRUP OTOMATIS, SPOTIFY LIVE & GAME',
                 rows: [
-                  { title: '🛡️ Panel Otomatisasi Grup', description: 'Welcome, Buka/Tutup, Kegiatan & ACC Member', id: 'panelgrup' },
+                  { title: '🛡️ Panel Otomatisasi Grup', description: 'Welcome, Buka/Tutup, Kegiatan, Interaksi Tema & ACC', id: 'panelgrup' },
                   { title: '🎧 Spotify Live (Video + Lirik)', description: 'Ketik: play <judul lagu> untuk lirik berjalan', id: 'downloadmenu' },
                   { title: '⚔️ Kuro Slash (Tombol Asli)', description: 'Main tebas Oni dengan tombol sentuh langsung', id: 'kuroslash' },
                   { title: '🌀 Speedy Dash (Tombol Asli)', description: 'Main Sonic kumpulkan Gold Rings di chat', id: 'sonic' },
@@ -1017,7 +1010,7 @@ async function prosesSatuPesan(sock, msg) {
       if (cmd === 'clean') { if (global.gc) global.gc(); await sock.sendMessage(jid, { text: '🧹 Cache dibersihkan.' }); return; }
     }
 
-        // Obrolan Interaktif Tematik di Grup
+    // Obrolan Interaktif Tematik di Grup
     if (isGroup) {
       await handleGroupThemeInteraction({
         sock,
@@ -1033,6 +1026,7 @@ async function prosesSatuPesan(sock, msg) {
       return;
     }
 
+    // Obrolan AI Bebas di Chat Pribadi
     if (rawText.length < 2) return;
     const reply = await panggilServerAISatSet(rawText, `Kamu adalah ${bot.userName}, asisten WhatsApp cerdas.`);
     if (reply) await sock.sendMessage(jid, { text: reply }, { quoted: msg });
@@ -1078,7 +1072,7 @@ async function start() {
     version,
     auth: state,
     logger: pino({ level: 'silent' }),
-    browser: ['WHUXEN Bot', 'Chrome', '9.4.0'],
+    browser: ['WHUXEN Bot', 'Chrome', '9.5.0'],
     printQRInTerminal: false,
     getMessage: async (key) => sentMessageCache.get(key.id) || { conversation: '' },
   });
@@ -1147,8 +1141,8 @@ async function start() {
     handleGroupJoinRequestEvent(sock, dbMemory, event).catch(() => {});
   });
 
-  // Scheduler Buka/Tutup Grup & Kegiatan Otomatis (Materi, Polling, Jadwal)
-  startGroupAutomationScheduler(sock, dbMemory);
+  // Scheduler Buka/Tutup Grup & Kegiatan Otomatis (Materi, Polling, Jadwal, Interaksi Tema)
+  startGroupAutomationScheduler(sock, dbMemory, saveMemory);
 
   sock.ev.on('connection.update', async ({ connection, lastDisconnect, qr }) => {
     if (qr && !bot.connected) {
@@ -1164,7 +1158,7 @@ async function start() {
       bot.pairingCode = null;
       bot.userPhone = sock.user?.id ? sock.user.id.split(':')[0] : PHONE;
       scheduleAuthBackupToGitHub(AUTH_DIR);
-      console.log(`✅ [TERHUBUNG] ${bot.userPhone} — 209 Fitur, Spotify Live, Group Auto & GitHub Sync Aktif`);
+      console.log(`✅ [TERHUBUNG] ${bot.userPhone} — 209 Fitur, Spotify Live, Group Theme Interaction & GitHub Sync Aktif`);
     } else if (connection === 'close') {
       bot.connected = false;
       const code = lastDisconnect?.error?.output?.statusCode;
