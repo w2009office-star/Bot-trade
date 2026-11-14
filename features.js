@@ -3,52 +3,22 @@ import path from 'path';
 import http from 'http';
 import os from 'os';
 import crypto from 'crypto';
-import { execSync, spawn } from 'child_process';
+import { execSync } from 'child_process';
 import {
   prepareWAMessageMedia,
   generateWAMessageFromContent,
+  downloadContentFromMessage,
   proto,
 } from '@whiskeysockets/baileys';
 
 // ============================================================
-// KONFIGURASI, KONTEKS BERSAMA & AUTO-HTTPS PUBLIC URL
+// KONFIGURASI & KONTEKS BERSAMA
 // ============================================================
 let ctx = {};
-let detectedPublicUrl = '';
 let cachedSurahList = null;
-let cachedMenuVideoBuffer = null;
-let cachedMenuVideoTime = 0;
 
 export function initFeatures(sharedContext) {
   ctx = sharedContext;
-  if (ctx.PUBLIC_URL && ctx.PUBLIC_URL.startsWith('https://')) {
-    detectedPublicUrl = ctx.PUBLIC_URL;
-  } else {
-    initAutoHttpsTunnel();
-  }
-}
-
-export function getLivePublicUrl() {
-  if (detectedPublicUrl && detectedPublicUrl.startsWith('https://')) return detectedPublicUrl;
-  if (ctx.PUBLIC_URL && ctx.PUBLIC_URL.startsWith('https://')) return ctx.PUBLIC_URL;
-  return '';
-}
-
-function initAutoHttpsTunnel() {
-  const port = process.env.PORT || 3000;
-  try {
-    const tunnel = spawn('npx', ['--yes', 'localtunnel', '--port', String(port)], {
-      stdio: ['ignore', 'pipe', 'ignore'],
-    });
-    tunnel.stdout.on('data', (chunk) => {
-      const match = chunk.toString().match(/https:\/\/[a-zA-Z0-9.-]+\.loca\.lt/);
-      if (match && match[0]) {
-        detectedPublicUrl = match[0];
-        console.log(`🌐 [AUTO-HTTPS] Layar Tap aktif di: ${detectedPublicUrl}`);
-      }
-    });
-    tunnel.on('error', () => {});
-  } catch {}
 }
 
 const DEFAULT_HEADERS = {
@@ -58,7 +28,7 @@ const DEFAULT_HEADERS = {
 };
 
 // ============================================================
-// STRUKTUR KATEGORI MENU (SEMUA FITUR LENGKAP)
+// STRUKTUR KATEGORI MENU LENGKAP
 // ============================================================
 export const MENU_CATEGORIES = {
   AI: [
@@ -77,8 +47,8 @@ export const MENU_CATEGORIES = {
   ],
   DOWNLOAD: [
     'tiktok', 'tt', 'ttmp3', 'ttslide', 'ytmp4', 'ytmp3', 'ytdl',
-    'yts', 'play', 'song', 'spotify', 'video', 'igdl', 'fb', 'twitter',
-    'capcut', 'mediafire', 'gdrive', 'gitclone', 'tts',
+    'yts', 'play', 'play2', 'song', 'spotify', 'video', 'igdl', 'fb',
+    'twitter', 'capcut', 'mediafire', 'gdrive', 'gitclone', 'tts',
   ],
   SEARCH: [
     'define', 'wiki', 'cuaca', 'wthr', 'praytime', 'surah',
@@ -103,15 +73,14 @@ export const MENU_CATEGORIES = {
     'antilink', 'antivirtek', 'antibug', 'antitoxic', 'antispam',
     'welcome', 'leave',
   ],
-  LOGO: [
-    'animasi', 'linkvideo', 'font', 'fancy', 'font1', 'font2', 'font3',
-    'font4', 'font5', 'font6', 'font7', 'font8', 'font9', 'font10',
+  STICKER_LOGO: [
+    'sticker', 'stiker', 's', 'brat', 'bratvid', 'bratvideo',
+    'ttp', 'attp', 'animasi', 'linkvideo', 'font', 'fancy',
     'logo', 'neon', 'gold', 'galaxy', 'glitch', 'matrix', 'graffiti', 'thunder',
   ],
   TOOLS: [
-    'hitung', 'catat', 'catatan', 'terjemah', 'translate', 'id',
-    'getpp', 'getbio', 'gpass', 'qr', 'shorturl', 'vv', 'rvo',
-    'waktu', 'sticker', 'attp',
+    'rvo', 'rvop', 'vv', 'hitung', 'catat', 'catatan', 'terjemah',
+    'translate', 'id', 'getpp', 'getbio', 'gpass', 'qr', 'shorturl', 'waktu',
   ],
   OWNER: [
     'setnama', 'setname', 'botname', 'updatebio', 'block',
@@ -147,6 +116,26 @@ export function getUptime() {
 
 export function getTodayDateString() {
   return new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Jakarta' });
+}
+
+export function getIndonesianFullDateTime() {
+  const now = new Date();
+  const hariTanggal = now.toLocaleDateString('id-ID', {
+    timeZone: 'Asia/Jakarta',
+    weekday: 'long',
+    day: 'numeric',
+    month: 'long',
+    year: 'numeric',
+  });
+  const jam = now
+    .toLocaleTimeString('id-ID', {
+      timeZone: 'Asia/Jakarta',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+    })
+    .replace(':', '.');
+  return { hariTanggal, jam, full: `${hariTanggal} | ${jam} WIB` };
 }
 
 export function extractUrl(text) {
@@ -214,7 +203,7 @@ export function getServerHardwareStats() {
 }
 
 // ============================================================
-// NETWORK & KONVERTER LINK KE VIDEO PENDEK ANIMASI HD
+// NETWORK, STICKER MAKER (FOTO, VIDEO, TEKS, BRAT, BRATVID) & RVO
 // ============================================================
 export async function fetchWithTimeout(url, options = {}, timeoutMs = 15000) {
   const controller = new AbortController();
@@ -240,7 +229,7 @@ export async function fetchBuffer(url, referer = '') {
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   const arr = await res.arrayBuffer();
   const buf = Buffer.from(arr);
-  if (buf.length < 300) throw new Error('File kosong');
+  if (buf.length < 200) throw new Error('File kosong');
   return buf;
 }
 
@@ -256,22 +245,189 @@ function hasFfmpeg() {
   return ffmpegAvailable;
 }
 
-// Video MP4 animasi HD cadangan jika server tidak memiliki binary ffmpeg
+/**
+ * Mengonversi Buffer Foto atau Video pendek menjadi Stiker WebP WhatsApp asli
+ */
+export async function mediaBufferToWebpSticker(inputBuffer, isVideo = false) {
+  if (!inputBuffer) return null;
+
+  if (hasFfmpeg()) {
+    const id = crypto.randomBytes(6).toString('hex');
+    const tmpDir = os.tmpdir();
+    const ext = isVideo ? 'mp4' : 'png';
+    const inPath = path.join(tmpDir, `stk_in_${id}.${ext}`);
+    const outPath = path.join(tmpDir, `stk_out_${id}.webp`);
+
+    try {
+      await fsPromises.writeFile(inPath, inputBuffer);
+      const vf = isVideo
+        ? 'fps=12,scale=512:512:force_original_aspect_ratio=decrease,pad=512:512:(ow-iw)/2:(oh-ih)/2:color=0x00000000'
+        : 'scale=512:512:force_original_aspect_ratio=decrease,pad=512:512:(ow-iw)/2:(oh-ih)/2:color=0x00000000';
+      const cmd = isVideo
+        ? `ffmpeg -y -i "${inPath}" -t 6 -vf "${vf}" -c:v libwebp -loop 0 -q:v 65 -an "${outPath}"`
+        : `ffmpeg -y -i "${inPath}" -vf "${vf}" -c:v libwebp -lossless 0 -q:v 80 -loop 0 -an "${outPath}"`;
+      execSync(cmd, { stdio: 'ignore', timeout: 20000 });
+      const webpBuf = await fsPromises.readFile(outPath);
+      await fsPromises.unlink(inPath).catch(() => {});
+      await fsPromises.unlink(outPath).catch(() => {});
+      if (webpBuf && webpBuf.length > 100) return webpBuf;
+    } catch {
+      await fsPromises.unlink(inPath).catch(() => {});
+      await fsPromises.unlink(outPath).catch(() => {});
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Membuat Stiker BRAT (Gambar maupun Animasi Video Ketik)
+ */
+export async function createBratSticker(text, animated = false) {
+  const cleanText = (text || 'brat').trim().slice(0, 80);
+
+  if (animated) {
+    // 1. Coba API Brat Video langsung terlebih dahulu
+    const animApis = [
+      `https://api.siputzx.my.id/api/m/brat?text=${encodeURIComponent(cleanText)}&isAnimated=true&delay=450`,
+      `https://delirius-apiofc.vercel.app/canvas/bratvid?text=${encodeURIComponent(cleanText)}`,
+    ];
+    for (const apiUrl of animApis) {
+      const resBuf = await fetchBuffer(apiUrl).catch(() => null);
+      if (resBuf && resBuf.length > 500) {
+        // Jika sudah berbentuk RIFF WEBP langsung kembalikan
+        if (resBuf.slice(0, 4).toString() === 'RIFF' && resBuf.slice(8, 12).toString() === 'WEBP') {
+          return resBuf;
+        }
+        const converted = await mediaBufferToWebpSticker(resBuf, true);
+        if (converted) return converted;
+      }
+    }
+
+    // 2. Render frame demi frame kata demi kata jika ffmpeg tersedia
+    if (hasFfmpeg()) {
+      const words = cleanText.split(/\s+/);
+      const id = crypto.randomBytes(6).toString('hex');
+      const tmpDir = os.tmpdir();
+      const framePaths = [];
+
+      try {
+        for (let i = 0; i < words.length; i++) {
+          const partial = words.slice(0, i + 1).join(' ');
+          const imgUrl = `https://dummyimage.com/512x512/8ACE00/000000.png&text=${encodeURIComponent(partial)}`;
+          const frameBuf = await fetchBuffer(imgUrl).catch(() => null);
+          if (frameBuf) {
+            const fPath = path.join(tmpDir, `brat_${id}_${String(i).padStart(3, '0')}.png`);
+            await fsPromises.writeFile(fPath, frameBuf);
+            framePaths.push(fPath);
+          }
+        }
+        if (framePaths.length > 0) {
+          const outWebp = path.join(tmpDir, `brat_anim_${id}.webp`);
+          const pattern = path.join(tmpDir, `brat_${id}_%03d.png`);
+          execSync(
+            `ffmpeg -y -framerate 2.5 -i "${pattern}" -vf "scale=512:512" -c:v libwebp -loop 0 -q:v 75 "${outWebp}"`,
+            { stdio: 'ignore', timeout: 15000 }
+          );
+          const animWebp = await fsPromises.readFile(outWebp);
+          for (const fp of framePaths) await fsPromises.unlink(fp).catch(() => {});
+          await fsPromises.unlink(outWebp).catch(() => {});
+          if (animWebp && animWebp.length > 300) return animWebp;
+        }
+      } catch {
+        for (const fp of framePaths) await fsPromises.unlink(fp).catch(() => {});
+      }
+    }
+  }
+
+  // Mode Stiker BRAT Statis (atau fallback dari animasi)
+  const staticApis = [
+    `https://api.siputzx.my.id/api/m/brat?text=${encodeURIComponent(cleanText)}`,
+    `https://delirius-apiofc.vercel.app/canvas/brat?text=${encodeURIComponent(cleanText)}`,
+    `https://wsrv.nl/?url=${encodeURIComponent(`https://dummyimage.com/512x512/8ACE00/000000.png&text=${encodeURIComponent(cleanText)}`)}&output=webp&w=512&h=512`,
+  ];
+
+  for (const url of staticApis) {
+    const buf = await fetchBuffer(url).catch(() => null);
+    if (buf && buf.length > 300) {
+      if (buf.slice(0, 4).toString() === 'RIFF' && buf.slice(8, 12).toString() === 'WEBP') {
+        return buf;
+      }
+      const webpViaWsrv = await fetchBuffer(
+        `https://wsrv.nl/?url=${encodeURIComponent(url)}&output=webp&w=512&h=512`
+      ).catch(() => null);
+      if (webpViaWsrv) return webpViaWsrv;
+      const converted = await mediaBufferToWebpSticker(buf, false);
+      if (converted) return converted;
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Mengonversi URL gambar atau teks menjadi Stiker WebP via wsrv.nl / ffmpeg
+ */
+export async function urlOrTextToWebpSticker(textOrUrl) {
+  const targetUrl = textOrUrl.startsWith('http')
+    ? textOrUrl
+    : `https://dummyimage.com/512x512/0f172a/38bdf8.png&text=${encodeURIComponent(textOrUrl.slice(0, 50))}`;
+
+  const webpBuf = await fetchBuffer(
+    `https://wsrv.nl/?url=${encodeURIComponent(targetUrl)}&output=webp&w=512&h=512&fit=contain`
+  ).catch(() => null);
+
+  if (webpBuf && webpBuf.length > 200) return webpBuf;
+
+  const rawBuf = await fetchBuffer(targetUrl).catch(() => null);
+  return await mediaBufferToWebpSticker(rawBuf, false);
+}
+
+/**
+ * Ekstrak media dari pesan View Once (RVO - Read View Once)
+ */
+export async function extractAndDownloadViewOnce(quotedMessage) {
+  if (!quotedMessage) return null;
+
+  const container =
+    quotedMessage.viewOnceMessageV2?.message ||
+    quotedMessage.viewOnceMessageV2Extension?.message ||
+    quotedMessage.viewOnceMessage?.message ||
+    quotedMessage;
+
+  if (container?.imageMessage && (container.imageMessage.viewOnce || quotedMessage.viewOnceMessage || quotedMessage.viewOnceMessageV2 || quotedMessage.viewOnceMessageV2Extension)) {
+    const stream = await downloadContentFromMessage(container.imageMessage, 'image');
+    let buf = Buffer.from([]);
+    for await (const chunk of stream) buf = Buffer.concat([buf, chunk]);
+    return { type: 'image', buffer: buf, caption: container.imageMessage.caption || '' };
+  }
+
+  if (container?.videoMessage && (container.videoMessage.viewOnce || quotedMessage.viewOnceMessage || quotedMessage.viewOnceMessageV2 || quotedMessage.viewOnceMessageV2Extension)) {
+    const stream = await downloadContentFromMessage(container.videoMessage, 'video');
+    let buf = Buffer.from([]);
+    for await (const chunk of stream) buf = Buffer.concat([buf, chunk]);
+    return { type: 'video', buffer: buf, caption: container.videoMessage.caption || '' };
+  }
+
+  if (container?.audioMessage && (container.audioMessage.viewOnce || quotedMessage.viewOnceMessage || quotedMessage.viewOnceMessageV2 || quotedMessage.viewOnceMessageV2Extension)) {
+    const stream = await downloadContentFromMessage(container.audioMessage, 'audio');
+    let buf = Buffer.from([]);
+    for await (const chunk of stream) buf = Buffer.concat([buf, chunk]);
+    return { type: 'audio', buffer: buf, caption: '' };
+  }
+
+  return null;
+}
+
+// ============================================================
+// KONVERTER LINK KE VIDEO PENDEK ANIMASI HD
+// ============================================================
 const HD_FALLBACK_ANIMATION_MP4_URLS = [
   'https://assets.mixkit.co/videos/preview/mixkit-digital-animation-of-blue-lines-996-large.mp4',
   'https://assets.mixkit.co/videos/preview/mixkit-abstract-technology-network-lines-27667-large.mp4',
-  'https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExbW54bGNxM25qN3J2cXF2d3F0eW52bTZ0d3E4eG54Z3F1c2J6eCZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/3o7TKSjRrfIPjeiVyM/giphy.mp4',
 ];
 
-/**
- * Mengubah LINK (URL gambar, banner, atau halaman web) menjadi Video Pendek Animasi HD (MP4 720p)
- * yang otomatis bergerak (gifPlayback: true) di WhatsApp.
- */
-export async function convertLinkToHdShortVideo(sourceUrl, fallbackLabel = 'WHUXEN-01B HD', useCache = false) {
-  if (useCache && cachedMenuVideoBuffer && Date.now() - cachedMenuVideoTime < 10 * 60 * 1000) {
-    return { type: 'video', buffer: cachedMenuVideoBuffer };
-  }
-
+export async function convertLinkToHdShortVideo(sourceUrl, fallbackLabel = 'WHUXEN HD') {
   let imgBuf = null;
 
   if (sourceUrl && sourceUrl.startsWith('http')) {
@@ -279,11 +435,8 @@ export async function convertLinkToHdShortVideo(sourceUrl, fallbackLabel = 'WHUX
     if (isDirectImage) {
       imgBuf = await fetchBuffer(sourceUrl).catch(() => null);
     } else {
-      // Ambil screenshot HD dari link website menggunakan Microlink API
-      try {
-        const shotApi = `https://api.microlink.io/?url=${encodeURIComponent(sourceUrl)}&screenshot=true&meta=false&embed=screenshot.url`;
-        imgBuf = await fetchBuffer(shotApi).catch(() => null);
-      } catch {}
+      const shotApi = `https://api.microlink.io/?url=${encodeURIComponent(sourceUrl)}&screenshot=true&meta=false&embed=screenshot.url`;
+      imgBuf = await fetchBuffer(shotApi).catch(() => null);
     }
   }
 
@@ -292,7 +445,6 @@ export async function convertLinkToHdShortVideo(sourceUrl, fallbackLabel = 'WHUX
     imgBuf = await fetchBuffer(`https://dummyimage.com/1280x720/090d16/38bdf8.png&text=${safeLabel}`).catch(() => null);
   }
 
-  // 1. Jika ffmpeg tersedia di server, render Video Pendek HD 1280x720 30fps dengan animasi gerak zoom-pan halus
   if (imgBuf && hasFfmpeg()) {
     const id = crypto.randomBytes(6).toString('hex');
     const tmpDir = os.tmpdir();
@@ -306,44 +458,39 @@ export async function convertLinkToHdShortVideo(sourceUrl, fallbackLabel = 'WHUX
       const videoBuf = await fsPromises.readFile(outPath);
       await fsPromises.unlink(inPath).catch(() => {});
       await fsPromises.unlink(outPath).catch(() => {});
-      if (videoBuf && videoBuf.length > 2000) {
-        if (useCache) {
-          cachedMenuVideoBuffer = videoBuf;
-          cachedMenuVideoTime = Date.now();
-        }
-        return { type: 'video', buffer: videoBuf };
-      }
+      if (videoBuf && videoBuf.length > 2000) return { type: 'video', buffer: videoBuf };
     } catch {
       await fsPromises.unlink(inPath).catch(() => {});
       await fsPromises.unlink(outPath).catch(() => {});
     }
   }
 
-  // 2. Jika ffmpeg tidak terpasang, ambil stream MP4 Animasi HD langsung agar tetap tampil video bergerak!
   for (const mp4Url of HD_FALLBACK_ANIMATION_MP4_URLS) {
     const vidBuf = await fetchBuffer(mp4Url).catch(() => null);
-    if (vidBuf && vidBuf.length > 5000) {
-      if (useCache) {
-        cachedMenuVideoBuffer = vidBuf;
-        cachedMenuVideoTime = Date.now();
-      }
-      return { type: 'video', buffer: vidBuf, previewImage: imgBuf };
-    }
+    if (vidBuf && vidBuf.length > 5000) return { type: 'video', buffer: vidBuf };
   }
 
-  if (imgBuf) {
-    return { type: 'image', buffer: imgBuf };
-  }
-  return null;
+  return imgBuf ? { type: 'image', buffer: imgBuf } : null;
 }
 
 // ============================================================
-// RICH INTERACTIVE UI (TOMBOL RAPI, DROPDOWN & AUTO-VALIDASI URL)
+// RICH INTERACTIVE UI (DITERUSKAN + VERIFIED CARD + TOMBOL TAP)
 // ============================================================
 export async function sendInteractiveButtons(
   sock,
   jid,
-  { title = '', body = '', footer = '', buttons = [], sections = [], listTitle = '📂 Pilih Kategori', imageUrl = null, imageBuffer = null, mentions = [] },
+  {
+    title = '',
+    body = '',
+    footer = '',
+    buttons = [],
+    sections = [],
+    listTitle = '📂 Pilih Kategori',
+    imageUrl = null,
+    imageBuffer = null,
+    mentions = [],
+    forwardedCard = false,
+  },
   quotedMsg = null
 ) {
   try {
@@ -353,7 +500,6 @@ export async function sendInteractiveButtons(
 
     const nativeButtons = [];
 
-    // Jika ada daftar kategori (single_select), taruh paling atas agar menu rapi
     if (Array.isArray(sections) && sections.length > 0) {
       nativeButtons.push({
         name: 'single_select',
@@ -365,18 +511,15 @@ export async function sendInteractiveButtons(
     }
 
     for (const btn of buttons) {
-      if (btn.url) {
-        // Hanya kirim cta_url jika URL valid https:// agar tidak ditolak WhatsApp
-        if (typeof btn.url === 'string' && btn.url.startsWith('https://')) {
-          nativeButtons.push({
-            name: 'cta_url',
-            buttonParamsJson: JSON.stringify({
-              display_text: btn.text,
-              url: btn.url,
-              merchant_url: btn.url,
-            }),
-          });
-        }
+      if (btn.url && typeof btn.url === 'string' && btn.url.startsWith('https://')) {
+        nativeButtons.push({
+          name: 'cta_url',
+          buttonParamsJson: JSON.stringify({
+            display_text: btn.text,
+            url: btn.url,
+            merchant_url: btn.url,
+          }),
+        });
       } else if (btn.id) {
         nativeButtons.push({
           name: 'quick_reply',
@@ -390,10 +533,10 @@ export async function sendInteractiveButtons(
 
     let headerMedia = {};
     let hasMedia = false;
+    const imgBuf = imageBuffer || (imageUrl ? await fetchBuffer(imageUrl).catch(() => null) : null);
 
-    try {
-      const imgBuf = imageBuffer || (imageUrl ? await fetchBuffer(imageUrl).catch(() => null) : null);
-      if (imgBuf) {
+    if (imgBuf) {
+      try {
         const uploaded = await prepareWAMessageMedia(
           { image: imgBuf },
           { upload: sock.waUploadToServer }
@@ -402,8 +545,25 @@ export async function sendInteractiveButtons(
           headerMedia = { imageMessage: uploaded.imageMessage };
           hasMedia = true;
         }
-      }
-    } catch {}
+      } catch {}
+    }
+
+    const contextInfo = {
+      mentionedJid: mentions,
+    };
+
+    if (forwardedCard) {
+      contextInfo.forwardingScore = 999;
+      contextInfo.isForwarded = true;
+      contextInfo.externalAdReply = {
+        title: `WhatsApp ✓`,
+        body: `Kontak: ${ctx.bot?.userName || 'AI Asisten'}`,
+        thumbnail: imgBuf || undefined,
+        mediaType: 1,
+        renderLargerThumbnail: false,
+        sourceUrl: ctx.CHANNEL_URL || 'https://whatsapp.com',
+      };
+    }
 
     const interactiveMsg = proto.Message.InteractiveMessage.create({
       body: proto.Message.InteractiveMessage.Body.create({
@@ -421,9 +581,7 @@ export async function sendInteractiveButtons(
       nativeFlowMessage: proto.Message.InteractiveMessage.NativeFlowMessage.create({
         buttons: nativeButtons,
       }),
-      contextInfo: {
-        mentionedJid: mentions,
-      },
+      contextInfo,
     });
 
     const waMsg = generateWAMessageFromContent(
@@ -451,9 +609,10 @@ export async function sendInteractiveButtons(
     return true;
   } catch {
     const btnHints = buttons
-      .map((b) => (b.url ? `• *${b.text}:* ${b.url}` : `• Ketik *${b.id}* (${b.text})`))
+      .filter((b) => b.id)
+      .map((b) => `• Ketik *${b.id}* (${b.text})`)
       .join('\n');
-    const fallbackText = `${title ? `*${title}*\n\n` : ''}${body}${btnHints ? `\n\n🔘 *Pilihan Cepat:*\n${btnHints}` : ''}`;
+    const fallbackText = `${title ? `*${title}*\n\n` : ''}${body}${btnHints ? `\n\n🔘 *Kontrol Sentuh:*\n${btnHints}` : ''}`;
 
     if (imageBuffer) {
       await sock.sendMessage(jid, { image: imageBuffer, caption: fallbackText, mentions }, { quoted: quotedMsg || undefined });
@@ -499,105 +658,116 @@ export function deteksiVirtekDanBug(msg, rawText, isSenderAdmin) {
 }
 
 // ============================================================
-// TAMPILAN GAME VISUAL INTERAKTIF & LAYAR TAP LANGSUNG
+// LAYAR TAP LANGSUNG DI DALAM CHAT (KURO SLASH & SPEEDY DASH)
 // ============================================================
 export async function kirimTampilanKuroSlash(sock, jid, senderNum, state, statusEvent, quotedMsg) {
-  const laneNames = ['KIRI', 'TENGAH', 'KANAN'];
-  const laneIcons = ['[ 🥷 | · | · ]', '[ · | 🥷 | · ]', '[ · | · | 🥷 ]'];
+  const laneVisuals = [
+    '┃  🥷  ┃   ·   ┃   ·   ┃',
+    '┃   ·   ┃  🥷  ┃   ·   ┃',
+    '┃   ·   ┃   ·   ┃  🥷  ┃',
+  ];
+  const enemyVisuals = [
+    '┃  👹  ┃  🟡  ┃   ·   ┃',
+    '┃   ·   ┃  👹  ┃  💣  ┃',
+    '┃  🟡  ┃   ·   ┃  👹  ┃',
+  ];
   const hpBlocks = Math.max(0, Math.round(state.hp / 10));
   const hpBar = '█'.repeat(hpBlocks) + '░'.repeat(10 - hpBlocks);
 
   const cardText = encodeURIComponent(
-    `KURO SLASH | SCORE: ${state.score} | BEST: ${state.best} | HP: ${state.hp}/100 | POS: ${laneNames[state.lane]}`
+    `KURO SLASH  |  SCORE: ${state.score}  |  BEST: ${state.best}\nHP ${state.hp}/100  |  ULTI ${state.ulti}%  |  SPD ${state.speed.toFixed(1)}`
   );
-  const cardImgUrl = `https://dummyimage.com/900x460/14070b/f43f5e.png&text=${cardText}`;
-
-  const publicBase = getLivePublicUrl();
-  const tapScreenUrl = publicBase ? `${publicBase}/arcade/kuroslash?user=${senderNum}` : '';
+  const cardImgUrl = `https://dummyimage.com/900x440/18060c/f43f5e.png&text=${cardText}`;
 
   const bodyText =
-    `⚔️ *KURO SLASH — LONG ROAD ONI GARDA*\n` +
-    `👤 Pemain: @${senderNum}\n\n` +
+    `⚔️ *KURO SLASH* — _LONG ROAD · ONI GARDA_\n` +
     `🏆 *SCORE:* ${state.score}   |   👑 *BEST:* ${state.best}\n` +
     `❤️ *HP:* [${hpBar}] ${state.hp}/100\n` +
-    `🌊 *ULTI:* ${state.ulti}%   |   ⚡ *SPD:* ${state.speed.toFixed(1)}\n` +
-    `🛤️ *Jalur:* ${laneIcons[state.lane]}\n\n` +
-    `📢 *Aksi:* ${statusEvent}\n` +
-    (tapScreenUrl ? `📱 *Layar Tap Fullscreen:* ${tapScreenUrl}\n` : '') +
-    `────────────────────\n` +
-    `_Sentuh tombol di bawah untuk bermain langsung atau buka Layar Tap Fullscreen!_`;
-
-  const btns = [
-    { text: '◀ KIRI', id: 'kiri' },
-    { text: '⚔️ TEBAS', id: 'tebas' },
-    { text: '▶ KANAN', id: 'kanan' },
-    { text: `🌊 ULTI (${state.ulti}%)`, id: 'ulti' },
-  ];
-  if (tapScreenUrl) {
-    btns.unshift({ text: '📱 Buka Layar Tap Fullscreen', url: tapScreenUrl });
-  }
+    `🌊 *ULTI:* ${state.ulti}%   |   ⚡ *SPD:* ${state.speed.toFixed(1)}\n\n` +
+    `┏━━━━━━━┳━━━━━━━┳━━━━━━━┓\n` +
+    `${enemyVisuals[state.wave % 3]}\n` +
+    `┃   ·   ┃   ·   ┃   ·   ┃\n` +
+    `${laneVisuals[state.lane]}\n` +
+    `┗━━━━━━━┻━━━━━━━┻━━━━━━━┛\n\n` +
+    `📢 ${statusEvent}\n` +
+    `_⚔️ tebas+gelombang • PARRY peluru merah • tebas BOM = defuse_`;
 
   await sendInteractiveButtons(
     sock,
     jid,
     {
-      title: '⚔️ KURO SLASH ARCADE',
+      title: '⚔️ KURO SLASH — LAYAR TAP',
       body: bodyText,
-      footer: 'Sentuh tombol aksi untuk kendali cepat',
+      footer: 'Sentuh tombol di bawah untuk menggerakkan karakter langsung!',
       imageUrl: cardImgUrl,
+      forwardedCard: true,
       mentions: [`${senderNum}@s.whatsapp.net`],
-      buttons: btns,
+      buttons: [
+        { text: '◀ KIRI', id: 'kiri' },
+        { text: '⚔️ TEBAS', id: 'tebas' },
+        { text: '▶ KANAN', id: 'kanan' },
+        { text: `🌊 ULTI — ${state.ulti}%`, id: 'ulti' },
+      ],
     },
     quotedMsg
   );
 }
 
 export async function kirimTampilanSonic(sock, jid, senderNum, state, statusEvent, quotedMsg) {
-  const cardText = encodeURIComponent(
-    `SPEEDY DASH | RINGS: ${state.rings} | SCORE: ${state.score} | BEST: ${state.best} | SPD: ${state.speed.toFixed(1)}`
-  );
-  const cardImgUrl = `https://dummyimage.com/900x460/082f49/38bdf8.png&text=${cardText}`;
+  const trackFrame = state.laserAlert
+    ? '☁️ ☀️ ☁️\n💨 🦔💨 ─── 🔴⚡ [LASER KEDIP CEPAT!]\n🌿🟩🟩🟩🟩🟩🟩🟩🟩🟩🌿'
+    : '☁️ ☀️ ☁️\n💨 🦔💨 ─── 🪙 🪙 🪙 👾\n🌿🟩🟩🟩🟩🟩🟩🟩🟩🟩🌿';
 
-  const publicBase = getLivePublicUrl();
-  const tapScreenUrl = publicBase ? `${publicBase}/arcade/sonic?user=${senderNum}` : '';
+  const cardText = encodeURIComponent(
+    `SPEEDY DASH  |  RINGS: ${state.rings}  |  SCORE: ${state.score}  |  BEST: ${state.best}`
+  );
+  const cardImgUrl = `https://dummyimage.com/900x440/07263b/38bdf8.png&text=${cardText}`;
 
   const bodyText =
-    `🌀 *SPEEDY DASH — EMERALD COAST RUN*\n` +
-    `👤 Pemain: @${senderNum}\n\n` +
+    `🌀 *SPEEDY DASH* — _EMERALD COAST RUN_\n` +
     `🪙 *RINGS:* ${state.rings}   |   🏆 *SCORE:* ${state.score}   |   👑 *BEST:* ${state.best}\n` +
-    `⚡ *SPD:* ${state.speed.toFixed(1)}   |   🚨 *LASER:* ${state.laserAlert ? '🔴 KEDIP CEPAT!' : '🟢 Aman'}\n\n` +
-    `📢 *Aksi:* ${statusEvent}\n` +
-    (tapScreenUrl ? `📱 *Layar Tap Fullscreen:* ${tapScreenUrl}\n` : '') +
-    `────────────────────\n` +
-    `_Sentuh tombol BOOST / JUMP di bawah atau buka Layar Tap Fullscreen!_`;
-
-  const btns = [
-    { text: '⚡ BOOST', id: 'boost' },
-    { text: '⬆️ JUMP', id: 'jump' },
-    { text: '🛑 STOP GAME', id: 'stopgame' },
-  ];
-  if (tapScreenUrl) {
-    btns.unshift({ text: '📱 Buka Layar Tap Fullscreen', url: tapScreenUrl });
-  }
+    `⚡ *SPEED:* ${state.speed.toFixed(1)}   |   🚨 *STATUS:* ${state.laserAlert ? '🔴 LASER!' : '🟢 AMAN'}\n\n` +
+    `${trackFrame}\n\n` +
+    `📢 ${statusEvent}\n` +
+    `_Lompat saat garis merah LASER kedip cepat! • tiap 50 ring = BOSS!_`;
 
   await sendInteractiveButtons(
     sock,
     jid,
     {
-      title: '🌀 SPEEDY DASH SONIC',
+      title: '🌀 SPEEDY DASH — LAYAR TAP',
       body: bodyText,
-      footer: 'Sentuh tombol aksi untuk kendali cepat',
+      footer: 'Sentuh BOOST atau JUMP langsung di bawah!',
       imageUrl: cardImgUrl,
+      forwardedCard: true,
       mentions: [`${senderNum}@s.whatsapp.net`],
-      buttons: btns,
+      buttons: [
+        { text: '⚡ BOOST', id: 'boost' },
+        { text: '⬆️ JUMP', id: 'jump' },
+        { text: '🛑 STOP GAME', id: 'stopgame' },
+      ],
     },
     quotedMsg
   );
 }
 
 // ============================================================
-// DOWNLOADER (TIKTOK, YOUTUBE, SPOTIFY/PLAY, SOSMED)
+// DOWNLOADER (TIKTOK, YOUTUBE, SPOTIFY PLAYER CARD, SOSMED)
 // ============================================================
+export async function generateSpotifyPlayerCardBuffer(title, artist, thumbnailUrl, duration) {
+  const canvasApis = [
+    `https://api.siputzx.my.id/api/canvas/spotify?title=${encodeURIComponent(title.slice(0, 32))}&author=${encodeURIComponent(artist.slice(0, 28))}&image=${encodeURIComponent(thumbnailUrl)}&start=0:00&end=${encodeURIComponent(duration || '3:54')}`,
+    `https://delirius-apiofc.vercel.app/canvas/spotify?title=${encodeURIComponent(title.slice(0, 32))}&artist=${encodeURIComponent(artist.slice(0, 28))}&image=${encodeURIComponent(thumbnailUrl)}&duration=${encodeURIComponent(duration || '3:54')}`,
+  ];
+
+  for (const url of canvasApis) {
+    const buf = await fetchBuffer(url).catch(() => null);
+    if (buf && buf.length > 2000) return buf;
+  }
+
+  return await fetchBuffer(thumbnailUrl).catch(() => null);
+}
+
 export async function downloadTikTok(url) {
   try {
     const res = await fetchWithTimeout(
@@ -1060,287 +1230,13 @@ export async function getSmartAIResponse(prompt, senderJid, senderName, specialt
 }
 
 // ============================================================
-// LAYAR TAP FULLSCREEN (KURO SLASH, SONIC, SPOTIFY PLAYER) & WEB PANEL
+// WEB PANEL KONEKSI & STATUS SERVER
 // ============================================================
-function renderKuroSlashTapPage() {
-  return `<!DOCTYPE html>
-<html lang="id">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
-  <title>KURO SLASH — Long Road Oni Garda</title>
-  <style>
-    * { box-sizing: border-box; user-select: none; -webkit-tap-highlight-color: transparent; font-family: 'Segoe UI', sans-serif; }
-    body { margin: 0; background: #09090b; color: #f8fafc; display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 100vh; padding: 14px; }
-    .card { width: 100%; max-width: 410px; background: #121215; border: 1px solid #27272a; border-radius: 22px; padding: 16px; box-shadow: 0 20px 50px rgba(0,0,0,0.8); }
-    .top { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
-    .title h2 { margin: 0; font-size: 1.35rem; letter-spacing: 2px; line-height: 1.1; }
-    .title small { color: #a1a1aa; font-size: 0.65rem; letter-spacing: 3px; display: block; margin-top: 4px; }
-    .boxes { display: flex; gap: 8px; }
-    .stat { background: #1c1c21; border: 1px solid #2e2e36; border-radius: 10px; padding: 6px 12px; text-align: center; }
-    .stat span { display: block; font-size: 0.65rem; color: #a1a1aa; }
-    .stat strong { font-size: 1.05rem; }
-    .hp-wrap { background: #1f1f23; border-radius: 8px; padding: 4px; margin-bottom: 10px; }
-    .hp-bar { height: 10px; background: linear-gradient(90deg, #f43f5e, #fda4af); border-radius: 6px; width: 100%; transition: width 0.2s; }
-    canvas { width: 100%; height: 270px; background: radial-gradient(circle at 50% 35%, #fda4af, #4c0519 75%, #09090b); border-radius: 14px; display: block; border: 1px solid #3f3f46; }
-    .controls { display: grid; grid-template-columns: 1fr 1.6fr 1fr; gap: 10px; margin-top: 12px; }
-    button { border: none; border-radius: 14px; padding: 16px; font-size: 1.05rem; font-weight: bold; cursor: pointer; color: white; transition: transform 0.08s; }
-    button:active { transform: scale(0.95); }
-    .btn-dir { background: #1f1f24; border: 1px solid #3f3f46; }
-    .btn-slash { background: linear-gradient(135deg, #be123c, #881337); border: 1px solid #fb7185; }
-    .btn-ulti { width: 100%; margin-top: 10px; background: #18181b; border: 1px solid #3f3f46; color: #38bdf8; }
-    .hint { text-align: center; font-size: 0.72rem; color: #a1a1aa; margin-top: 10px; line-height: 1.4; }
-  </style>
-</head>
-<body>
-  <div class="card">
-    <div class="top">
-      <div class="title"><h2>KURO<br>SLASH</h2><small>LONG ROAD · ONI GARDA</small></div>
-      <div class="boxes">
-        <div class="stat"><span>SCORE</span><strong id="sc">0</strong></div>
-        <div class="stat"><span>BEST</span><strong id="bst">0</strong></div>
-      </div>
-    </div>
-    <div class="hp-wrap"><div class="hp-bar" id="hpbar"></div></div>
-    <canvas id="cv" width="360" height="270"></canvas>
-    <div class="controls">
-      <button class="btn-dir" ontouchstart="move(-1)" onclick="move(-1)">◀</button>
-      <button class="btn-slash" ontouchstart="slash()" onclick="slash()">⚔️ TEBAS</button>
-      <button class="btn-dir" ontouchstart="move(1)" onclick="move(1)">▶</button>
-    </div>
-    <button class="btn-ulti" id="ultibtn" ontouchstart="ulti()" onclick="ulti()">🌊 ULTI — 30%</button>
-    <div class="hint">⚔️ tebas+gelombang • PARRY peluru merah • tebas BOM = defuse • orbs emas = bonus • tiap ±1200 skor = BOSS 👹</div>
-  </div>
-  <script>
-    const cv = document.getElementById('cv'), ctx = cv.getContext('2d');
-    let lane = 1, score = 0, best = Number(localStorage.getItem('ks_best')||0), hp = 100, ultiVal = 30, slashFx = 0;
-    let items = [];
-    document.getElementById('bst').innerText = best;
-    const actx = new (window.AudioContext || window.webkitAudioContext)();
-    function beep(f, d=0.08) {
-      try { const o = actx.createOscillator(), g = actx.createGain(); o.frequency.value = f; o.connect(g); g.connect(actx.destination); o.start(); g.gain.exponentialRampToValueAtTime(0.001, actx.currentTime + d); o.stop(actx.currentTime + d); } catch {}
-    }
-    function move(d) { lane = Math.max(0, Math.min(2, lane + d)); beep(320); }
-    function slash() {
-      slashFx = 8; beep(620, 0.12);
-      items.forEach(it => { if (it.lane === lane && it.y > 150) { it.dead = true; score += 120; ultiVal = Math.min(100, ultiVal + 15); } });
-      items = items.filter(i => !i.dead);
-    }
-    function ulti() {
-      if (ultiVal < 100) return;
-      ultiVal = 0; slashFx = 15; beep(880, 0.25);
-      score += items.length * 100 + 300; items = [];
-    }
-    setInterval(() => {
-      items.push({ lane: Math.floor(Math.random()*3), y: 40, type: Math.random() < 0.3 ? 'orb' : 'oni' });
-    }, 850);
-    function loop() {
-      ctx.clearRect(0, 0, 360, 270);
-      ctx.fillStyle = '#09090b';
-      ctx.beginPath(); ctx.moveTo(145, 40); ctx.lineTo(215, 40); ctx.lineTo(280, 270); ctx.lineTo(80, 270); ctx.closePath(); ctx.fill();
-      ctx.strokeStyle = '#f43f5e'; ctx.lineWidth = 3; ctx.stroke();
-      const laneX = [125, 180, 235];
-      items.forEach(it => {
-        it.y += 3.2;
-        const px = 180 + (it.lane - 1) * (20 + it.y * 0.22);
-        ctx.fillStyle = it.type === 'orb' ? '#facc15' : '#ef4444';
-        ctx.beginPath(); ctx.arc(px, it.y, 10, 0, Math.PI*2); ctx.fill();
-        if (it.y > 235 && !it.dead) {
-          it.dead = true;
-          if (it.lane === lane) {
-            if (it.type === 'orb') { score += 80; beep(740); }
-            else { hp = Math.max(0, hp - 15); beep(140, 0.2); }
-          }
-        }
-      });
-      items = items.filter(i => !i.dead);
-      const hx = laneX[lane];
-      ctx.fillStyle = '#38bdf8'; ctx.beginPath(); ctx.arc(hx, 230, 14, 0, Math.PI*2); ctx.fill();
-      if (slashFx > 0) {
-        slashFx--; ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 4;
-        ctx.beginPath(); ctx.arc(hx, 225, 28, Math.PI, 0); ctx.stroke();
-      }
-      if (score > best) { best = score; localStorage.setItem('ks_best', best); }
-      document.getElementById('sc').innerText = score;
-      document.getElementById('bst').innerText = best;
-      document.getElementById('hpbar').style.width = hp + '%';
-      document.getElementById('ultibtn').innerText = '🌊 ULTI — ' + ultiVal + '%';
-      if (hp <= 0) { hp = 100; score = 0; items = []; }
-      requestAnimationFrame(loop);
-    }
-    loop();
-  </script>
-</body>
-</html>`;
-}
-
-function renderSonicTapPage() {
-  return `<!DOCTYPE html>
-<html lang="id">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
-  <title>SPEEDY DASH — Emerald Coast Run</title>
-  <style>
-    * { box-sizing: border-box; user-select: none; -webkit-tap-highlight-color: transparent; font-family: 'Segoe UI', sans-serif; }
-    body { margin: 0; background: #09090b; color: #f8fafc; display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 100vh; padding: 14px; }
-    .card { width: 100%; max-width: 410px; background: #121215; border: 1px solid #27272a; border-radius: 22px; padding: 16px; }
-    .top { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
-    .title h2 { margin: 0; font-size: 1.3rem; color: #38bdf8; line-height: 1.1; }
-    .title small { color: #94a3b8; font-size: 0.65rem; letter-spacing: 2px; }
-    .boxes { display: flex; gap: 6px; }
-    .stat { background: #1e293b; border-radius: 10px; padding: 6px 10px; text-align: center; }
-    .stat span { display: block; font-size: 0.62rem; color: #94a3b8; }
-    .stat strong { font-size: 1rem; }
-    canvas { width: 100%; height: 220px; background: linear-gradient(180deg, #38bdf8, #bae6fd 65%, #15803d 65%, #166534); border-radius: 14px; display: block; }
-    .controls { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 14px; }
-    button { border: none; border-radius: 14px; padding: 18px; font-size: 1.05rem; font-weight: bold; cursor: pointer; }
-    button:active { transform: scale(0.95); }
-    .btn-boost { background: linear-gradient(135deg, #facc15, #ca8a04); color: #09090b; }
-    .btn-jump { background: linear-gradient(135deg, #3b82f6, #1d4ed8); color: white; }
-    .hint { text-align: center; font-size: 0.72rem; color: #a1a1aa; margin-top: 10px; }
-  </style>
-</head>
-<body>
-  <div class="card">
-    <div class="top">
-      <div class="title"><h2>🌀 SPEEDY<br>DASH</h2><small>EMERALD COAST RUN</small></div>
-      <div class="boxes">
-        <div class="stat"><span>RINGS</span><strong id="rg">10</strong></div>
-        <div class="stat"><span>SCORE</span><strong id="sc">0</strong></div>
-        <div class="stat"><span>BEST</span><strong id="bst">0</strong></div>
-      </div>
-    </div>
-    <canvas id="cv" width="360" height="220"></canvas>
-    <div class="controls">
-      <button class="btn-boost" ontouchstart="boost()" onclick="boost()">⚡ BOOST</button>
-      <button class="btn-jump" ontouchstart="jump()" onclick="jump()">⬆ JUMP</button>
-    </div>
-    <div class="hint">Lompat saat garis merah LASER kedip cepat! • kena musuh = ring turun 10% saja • tiap 50 ring = BOSS!</div>
-  </div>
-  <script>
-    const cv = document.getElementById('cv'), ctx = cv.getContext('2d');
-    let py = 135, vy = 0, rings = 10, score = 0, best = Number(localStorage.getItem('sd_best')||0), spd = 4;
-    let obs = [];
-    document.getElementById('bst').innerText = best;
-    function jump() { if (py >= 130) vy = -11; }
-    function boost() { spd = 8; setTimeout(() => spd = 4, 600); score += 30; }
-    setInterval(() => { obs.push({ x: 370, type: Math.random() < 0.65 ? 'ring' : 'enemy' }); }, 900);
-    function loop() {
-      ctx.clearRect(0, 0, 360, 220);
-      py += vy; vy += 0.65;
-      if (py > 135) { py = 135; vy = 0; }
-      ctx.fillStyle = '#2563eb'; ctx.beginPath(); ctx.arc(65, py, 14, 0, Math.PI*2); ctx.fill();
-      obs.forEach(o => {
-        o.x -= spd;
-        if (o.type === 'ring') {
-          ctx.strokeStyle = '#facc15'; ctx.lineWidth = 4;
-          ctx.beginPath(); ctx.arc(o.x, 120, 9, 0, Math.PI*2); ctx.stroke();
-        } else {
-          ctx.fillStyle = '#dc2626'; ctx.fillRect(o.x - 10, 125, 20, 22);
-        }
-        if (Math.abs(o.x - 65) < 20 && Math.abs(py - 125) < 24 && !o.hit) {
-          o.hit = true;
-          if (o.type === 'ring') { rings++; score += 45; }
-          else { rings = Math.max(0, Math.floor(rings * 0.9)); }
-        }
-      });
-      obs = obs.filter(o => o.x > -20 && !o.hit);
-      if (score > best) { best = score; localStorage.setItem('sd_best', best); }
-      document.getElementById('rg').innerText = rings;
-      document.getElementById('sc').innerText = score;
-      document.getElementById('bst').innerText = best;
-      requestAnimationFrame(loop);
-    }
-    loop();
-  </script>
-</body>
-</html>`;
-}
-
-function renderSpotifyPlayerPage(title, artist, vidId, dur) {
-  const safeTitle = title.replace(/</g, '&lt;');
-  const safeArtist = artist.replace(/</g, '&lt;');
-  const thumb = vidId ? `https://i.ytimg.com/vi/${vidId}/hqdefault.jpg` : '';
-  return `<!DOCTYPE html>
-<html lang="id">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>${safeTitle} — Spotify & YT Music UI</title>
-  <style>
-    * { box-sizing: border-box; font-family: 'Segoe UI', sans-serif; }
-    body { margin: 0; background: #09090b; color: #f8fafc; display: flex; align-items: center; justify-content: center; min-height: 100vh; padding: 16px; }
-    .player { width: 100%; max-width: 390px; background: #121212; border: 1px solid #27272a; border-radius: 24px; padding: 22px; text-align: center; box-shadow: 0 25px 60px rgba(0,0,0,0.85); }
-    .hdr { font-size: 0.72rem; letter-spacing: 2px; color: #a1a1aa; text-transform: uppercase; }
-    .sub { font-size: 0.92rem; font-weight: 600; margin: 4px 0 18px 0; }
-    .cover { width: 100%; aspect-ratio: 1/1; background: #000; border-radius: 16px; overflow: hidden; display: flex; align-items: center; justify-content: center; margin-bottom: 18px; border: 1px solid #27272a; }
-    .cover img { width: 100%; height: 100%; object-fit: cover; }
-    .meta { display: flex; justify-content: space-between; align-items: center; text-align: left; margin-bottom: 14px; }
-    .meta h3 { margin: 0; font-size: 1.25rem; }
-    .meta p { margin: 4px 0 0 0; color: #a1a1aa; font-size: 0.9rem; }
-    .bar { width: 100%; height: 4px; background: #3f3f46; border-radius: 4px; position: relative; margin: 10px 0 6px 0; }
-    .prog { width: 25%; height: 100%; background: #fff; border-radius: 4px; }
-    .times { display: flex; justify-content: space-between; font-size: 0.75rem; color: #a1a1aa; }
-    .btns { display: flex; justify-content: space-around; align-items: center; margin: 22px 0 16px 0; }
-    .play-btn { width: 64px; height: 64px; border-radius: 50%; background: #fff; color: #000; border: none; font-size: 1.5rem; font-weight: bold; cursor: pointer; }
-    .foot { font-size: 0.8rem; color: #71717a; }
-  </style>
-</head>
-<body>
-  <div class="player">
-    <div class="hdr">YT MUSIC & SPOTIFY AUDIO</div>
-    <div class="sub">${safeArtist}</div>
-    <div class="cover">${thumb ? `<img src="${thumb}" alt="cover"/>` : `<h2>${safeTitle}</h2>`}</div>
-    <div class="meta">
-      <div><h3>${safeTitle}</h3><p>${safeArtist}</p></div>
-      <div style="font-size:1.4rem;">🤍</div>
-    </div>
-    <div class="bar"><div class="prog"></div></div>
-    <div class="times"><span>0:01</span><span>${dur || '3:45'}</span></div>
-    <div class="btns">
-      <span>💬</span><span>⏮</span>
-      <button class="play-btn" onclick="window.open('https://www.youtube.com/watch?v=${vidId}', '_blank')">▶</button>
-      <span>⏭</span><span>🔁</span>
-    </div>
-    <div class="foot">support terus ${ctx.bot?.userName || 'Bot'} yaaa</div>
-  </div>
-</body>
-</html>`;
-}
-
 export function mulaiWeb() {
   const port = process.env.PORT || 3000;
 
   const server = http.createServer((req, res) => {
-    const fwdHost = req.headers['x-forwarded-host'] || req.headers.host;
-    if (fwdHost && !fwdHost.includes('localhost') && !fwdHost.startsWith('127.')) {
-      detectedPublicUrl = `https://${fwdHost}`;
-    }
-
     const parsedUrl = new URL(req.url, `http://localhost:${port}`);
-
-    if (parsedUrl.pathname === '/arcade/kuroslash') {
-      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-      return res.end(renderKuroSlashTapPage());
-    }
-
-    if (parsedUrl.pathname === '/arcade/sonic') {
-      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-      return res.end(renderSonicTapPage());
-    }
-
-    if (parsedUrl.pathname === '/player') {
-      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-      return res.end(
-        renderSpotifyPlayerPage(
-          parsedUrl.searchParams.get('q') || 'Now Playing',
-          parsedUrl.searchParams.get('artist') || 'Artist',
-          parsedUrl.searchParams.get('vid') || '',
-          parsedUrl.searchParams.get('dur') || '3:45'
-        )
-      );
-    }
 
     if (parsedUrl.pathname === '/api/status') {
       res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -1352,7 +1248,7 @@ export function mulaiWeb() {
         JSON.stringify({
           connected: ctx.bot.connected,
           qrUrl: qrImageUrl,
-          pairingCode: ctx.bot.pairingCode || (process.env.PHONE_NUMBER ? '⏳ Meminta Kode OTP...' : 'Isi PHONE_NUMBER di Railway Variables'),
+          pairingCode: ctx.bot.pairingCode || (process.env.PHONE_NUMBER ? '⏳ Meminta Kode OTP...' : 'Isi PHONE_NUMBER di Variables'),
           uptime: getUptime(),
           version: ctx.dbMemory.version,
           lastUpdateDate: ctx.dbMemory.lastUpdateDate,
@@ -1418,7 +1314,7 @@ export function mulaiWeb() {
         .stat-card strong { font-size: 0.95rem; color: #f8fafc; }
         .input-group { display: flex; gap: 8px; margin: 12px 0; }
         .input-group input { flex: 1; padding: 10px; border: 1px solid #475569; background: #0f172a; color: white; border-radius: 8px; outline: none; }
-        .btn { background: #0284c7; color: white; border: none; padding: 10px 16px; border-radius: 8px; cursor: pointer; font-weight: bold; text-decoration: none; display: inline-block; }
+        .btn { background: #0284c7; color: white; border: none; padding: 10px 16px; border-radius: 8px; cursor: pointer; font-weight: bold; }
         .btn-green { background: #059669; width: 100%; margin-top: 8px; }
         .list-box { max-height: 170px; overflow-y: auto; background: #0f172a; border-radius: 8px; padding: 10px; font-size: 0.84rem; }
         .list-item { padding: 6px 0; border-bottom: 1px dashed #334155; }
@@ -1428,29 +1324,23 @@ export function mulaiWeb() {
     <body>
       <div class="header">
         <h1>🚀 WHUXEN BOT CONTROL PANEL</h1>
-        <p style="color:#94a3b8; margin:0;">HD Moving Video Menu, Rich Interactive UI, & Layar Tap Arcade</p>
-        <div style="margin-top:10px; display:flex; gap:8px; justify-content:center; flex-wrap:wrap;">
-          <a class="btn" href="/arcade/kuroslash" target="_blank">⚔️ Layar Tap Kuro Slash</a>
-          <a class="btn" href="/arcade/sonic" target="_blank">🌀 Layar Tap Speedy Dash</a>
-        </div>
+        <p style="color:#94a3b8; margin:0;">Forwarded Profile Menu, Direct In-Chat Layar Tap, Brat Sticker & RVO</p>
       </div>
-
       <div class="container">
         <div class="panel">
           <div class="panel-title">📱 PANEL 1: KONEKSI WHATSAPP (QR & OTP)</div>
           <div id="p1-content">Memuat status koneksi...</div>
         </div>
-
         <div class="panel">
           <div class="panel-title">⚙️ PANEL 2: PENGATURAN & SELF-TEST SERVER</div>
           <div class="stat-grid">
-            <div class="stat-card"><div>Versi & Update</div><strong id="st-ver">v6.5</strong></div>
+            <div class="stat-card"><div>Versi & Update</div><strong id="st-ver">v7.0</strong></div>
             <div class="stat-card"><div>Bot Uptime</div><strong id="st-uptime">-</strong></div>
             <div class="stat-card"><div>Total Perintah Aktif</div><strong id="st-cmds">0</strong></div>
             <div class="stat-card"><div>Kesehatan Server</div><strong id="st-health">Menguji...</strong></div>
           </div>
           <div class="input-group">
-            <input type="text" id="new-name-input" placeholder="Ubah nama bot (otomatis update menu)...">
+            <input type="text" id="new-name-input" placeholder="Ubah nama bot...">
             <button class="btn" onclick="changeWaName()">Simpan</button>
           </div>
           <button class="btn btn-green" onclick="triggerUpdate()">🩺 Jalankan Self-Test & Evolusi Sekarang</button>
@@ -1460,7 +1350,6 @@ export function mulaiWeb() {
           <div class="list-box" id="menu-container"></div>
         </div>
       </div>
-
       <script>
         async function updateData() {
           try {
@@ -1499,5 +1388,5 @@ export function mulaiWeb() {
     </html>`);
   });
 
-  server.listen(port, () => console.log(`🌐 Web Panel & Layar Tap berjalan di port ${port}`));
+  server.listen(port, () => console.log(`🌐 Web Panel berjalan di port ${port}`));
 }
