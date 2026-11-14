@@ -8,6 +8,7 @@ export const GROUP_AUTO_COMMANDS = [
   'autobuka',
   'autotutup',
   'tambahkegiatan',
+  'syncjadwal',
   'listkegiatan',
   'hapuskegiatan',
   'teskegiatan',
@@ -21,9 +22,8 @@ export const GROUP_AUTO_COMMANDS = [
   'panelgrup',
 ];
 
-// ============================================================
-// INISIALISASI & DEFAULT KONFIGURASI GRUP
-// ============================================================
+const VALID_DAYS = ['senin', 'selasa', 'rabu', 'kamis', 'jumat', 'sabtu', 'minggu', 'setiap_hari'];
+
 export function ensureGroupAutoConfig(dbMemory, jid) {
   if (!dbMemory.groupSettings[jid]) {
     dbMemory.groupSettings[jid] = {
@@ -44,13 +44,13 @@ export function ensureGroupAutoConfig(dbMemory, jid) {
   if (typeof cfg.goodbyeText !== 'string') {
     cfg.goodbyeText = '👋 Sampai jumpa @user, terima kasih sudah pernah bergabung di *@group*.';
   }
-  if (typeof cfg.autoOpenTime !== 'string') cfg.autoOpenTime = ''; // format HH:mm WIB
-  if (typeof cfg.autoCloseTime !== 'string') cfg.autoCloseTime = ''; // format HH:mm WIB
+  if (typeof cfg.autoOpenTime !== 'string') cfg.autoOpenTime = '';
+  if (typeof cfg.autoCloseTime !== 'string') cfg.autoCloseTime = '';
   if (!Array.isArray(cfg.activities)) cfg.activities = [];
   if (!cfg.memberFilter) {
     cfg.memberFilter = {
       enabled: false,
-      allowedPrefixes: ['62'], // kosongkan [] untuk izinkan semua negara
+      allowedPrefixes: ['62'],
       requirePhoto: false,
       blacklist: [],
     };
@@ -69,7 +69,14 @@ function getWibTimeAndDate() {
   const date = new Intl.DateTimeFormat('en-CA', {
     timeZone: 'Asia/Jakarta',
   }).format(now);
-  return { time, date };
+  const day = new Intl.DateTimeFormat('id-ID', {
+    timeZone: 'Asia/Jakarta',
+    weekday: 'long',
+  })
+    .format(now)
+    .toLowerCase()
+    .replace(/[^a-z]/g, '');
+  return { time, date, day };
 }
 
 function formatWelcomeTemplate(template, { userTag, groupName, groupDesc, memberCount }) {
@@ -121,10 +128,7 @@ export async function handleGroupParticipantsUpdate(sock, dbMemory, update) {
             mentions: [participant],
           }).catch(() => {});
         } else {
-          await sock.sendMessage(jid, {
-            text,
-            mentions: [participant],
-          }).catch(() => {});
+          await sock.sendMessage(jid, { text, mentions: [participant] }).catch(() => {});
         }
       } else if (action === 'remove') {
         const text = formatWelcomeTemplate(cfg.goodbyeText, {
@@ -133,10 +137,7 @@ export async function handleGroupParticipantsUpdate(sock, dbMemory, update) {
           groupDesc,
           memberCount,
         });
-        await sock.sendMessage(jid, {
-          text,
-          mentions: [participant],
-        }).catch(() => {});
+        await sock.sendMessage(jid, { text, mentions: [participant] }).catch(() => {});
       }
     }
   } catch {}
@@ -153,12 +154,10 @@ async function evaluateAndProcessJoinRequest(sock, dbMemory, jid, participant) {
   const cleanNum = participant.split('@')[0].split(':')[0].replace(/\D/g, '');
   let rejectReason = '';
 
-  // Cek Blacklist
   if (filter.blacklist.includes(cleanNum)) {
     rejectReason = 'Nomor terdaftar di blacklist grup';
   }
 
-  // Cek Prefix Negara (misal wajib 62)
   if (!rejectReason && Array.isArray(filter.allowedPrefixes) && filter.allowedPrefixes.length > 0) {
     const allowed = filter.allowedPrefixes.some((pref) => cleanNum.startsWith(pref));
     if (!allowed) {
@@ -166,7 +165,6 @@ async function evaluateAndProcessJoinRequest(sock, dbMemory, jid, participant) {
     }
   }
 
-  // Cek Foto Profil jika diwajibkan
   if (!rejectReason && filter.requirePhoto) {
     const pp = await sock.profilePictureUrl(participant, 'image').catch(() => null);
     if (!pp) {
@@ -198,11 +196,12 @@ export async function handleGroupJoinRequestEvent(sock, dbMemory, event) {
 }
 
 // ============================================================
-// 3. EKSEKUTOR KEGIATAN GRUP (MATERI / POLLING / JADWAL)
+// 3. EKSEKUTOR KEGIATAN GRUP (MATERI AI / POLLING / JADWAL)
 // ============================================================
 async function executeGroupActivity(sock, jid, activity) {
   const type = (activity.type || 'jadwal').toLowerCase();
   const content = activity.content || '';
+  const dayLabel = activity.day && activity.day !== 'setiap_hari' ? ` (${activity.day.toUpperCase()})` : '';
 
   if (type === 'poll' || type === 'polling') {
     const parts = content.split(';').map((s) => s.trim()).filter(Boolean);
@@ -223,25 +222,24 @@ async function executeGroupActivity(sock, jid, activity) {
     if (content.toLowerCase().startsWith('ai:')) {
       const topic = content.slice(3).trim();
       const generated = await panggilServerAISatSet(
-        `Buatkan materi singkat, terstruktur, dan bermanfaat untuk grup WhatsApp tentang: "${topic}". Gunakan poin-poin rapi agar mudah dibaca.`,
-        'Kamu adalah pemateri komunitas WhatsApp yang edukatif, ringkas, dan menarik.'
+        `Buatkan materi belajar yang terstruktur, jelas, dan interaktif untuk grup belajar WhatsApp tentang topik: "${topic}". Sertakan penjelasan singkat, contoh praktis, dan 1 pertanyaan latihan di akhir agar member aktif berdiskusi.`,
+        'Kamu adalah tutor cerdas komunitas belajar WhatsApp. Gunakan format poin-poin yang rapi dan mudah dibaca di HP.'
       );
       if (generated) materiText = generated;
     }
     await sock.sendMessage(jid, {
-      text: `📚 *MATERI OTOMATIS GRUP*\n🕒 Jadwal: ${activity.time} WIB\n\n${materiText}`,
+      text: `📚 *MATERI TERJADWAL AI*${dayLabel}\n🕒 Pukul: ${activity.time} WIB\n\n${materiText}`,
     });
     return;
   }
 
-  // Default: jadwal / pengumuman kegiatan
   await sock.sendMessage(jid, {
-    text: `🗓️ *PENGINGAT JADWAL & KEGIATAN GRUP*\n⏰ Pukul ${activity.time} WIB\n\n${content}`,
+    text: `🗓️ *PENGINGAT JADWAL GRUP*${dayLabel}\n⏰ Pukul ${activity.time} WIB\n\n${content}`,
   });
 }
 
 // ============================================================
-// 4. SCHEDULER OTOMATIS (BUKA/TUTUP GRUP + KEGIATAN HARIAN)
+// 4. SCHEDULER OTOMATIS (BUKA/TUTUP GRUP + KEGIATAN PER HARI)
 // ============================================================
 let schedulerStarted = false;
 const executedLog = new Set();
@@ -252,14 +250,13 @@ export function startGroupAutomationScheduler(sock, dbMemory) {
 
   setInterval(async () => {
     try {
-      const { time: nowWib, date: todayWib } = getWibTimeAndDate();
+      const { time: nowWib, date: todayWib, day: todayDay } = getWibTimeAndDate();
       const groupJids = Object.keys(dbMemory.groupSettings || {});
 
       for (const jid of groupJids) {
         if (!jid.endsWith('@g.us')) continue;
         const cfg = ensureGroupAutoConfig(dbMemory, jid);
 
-        // A. Buka Grup Otomatis
         if (cfg.autoOpenTime && cfg.autoOpenTime === nowWib) {
           const runKey = `open:${jid}:${todayWib}:${nowWib}`;
           if (!executedLog.has(runKey)) {
@@ -271,7 +268,6 @@ export function startGroupAutomationScheduler(sock, dbMemory) {
           }
         }
 
-        // B. Tutup Grup Otomatis
         if (cfg.autoCloseTime && cfg.autoCloseTime === nowWib) {
           const runKey = `close:${jid}:${todayWib}:${nowWib}`;
           if (!executedLog.has(runKey)) {
@@ -283,10 +279,12 @@ export function startGroupAutomationScheduler(sock, dbMemory) {
           }
         }
 
-        // C. Kegiatan Grup Otomatis (Materi, Polling, Jadwal)
         for (let i = 0; i < cfg.activities.length; i++) {
           const act = cfg.activities[i];
-          if (act.time === nowWib) {
+          const actDay = (act.day || 'setiap_hari').toLowerCase();
+          const isDayMatch = actDay === 'setiap_hari' || actDay === todayDay;
+
+          if (isDayMatch && act.time === nowWib) {
             const actKey = `act:${jid}:${i}:${todayWib}:${nowWib}`;
             if (!executedLog.has(actKey)) {
               executedLog.add(actKey);
@@ -296,7 +294,6 @@ export function startGroupAutomationScheduler(sock, dbMemory) {
         }
       }
 
-      // Bersihkan cache eksekusi lama agar hemat RAM
       if (executedLog.size > 500) executedLog.clear();
     } catch {}
   }, 25 * 1000);
@@ -325,7 +322,6 @@ export async function handleGroupAutomationCommand({
     return true;
   }
 
-  // Cek hak akses Admin Grup atau Owner
   let isAdmin = isOwner;
   let meta = null;
   try {
@@ -343,7 +339,6 @@ export async function handleGroupAutomationCommand({
 
   const cfg = ensureGroupAutoConfig(dbMemory, jid);
 
-  // PANEL KONTROL INTERAKTIF GRUP
   if (cmd === 'panelgrup') {
     await sendNativeInteractiveButtons(
       sock,
@@ -358,10 +353,10 @@ export async function handleGroupAutomationCommand({
           `• *Auto Tutup:* ${cfg.autoCloseTime || 'Nonaktif'}\n` +
           `• *Filter & ACC Member:* ${cfg.memberFilter.enabled ? 'ON ✅' : 'OFF ❌'} (Prefix: ${cfg.memberFilter.allowedPrefixes.join(',') || 'Semua'})\n` +
           `• *Kegiatan Terjadwal:* ${cfg.activities.length} jadwal`,
-        footer: 'Gunakan tombol cepat atau ketik perintah pengaturan',
+        footer: 'Ketik listkegiatan atau syncjadwal 19:00 untuk kelola materi AI',
         buttons: [
+          { text: '📋 List Kegiatan', id: 'listkegiatan' },
           { text: '👋 Toggle Welcome', id: 'welcome' },
-          { text: '🚪 Toggle Goodbye', id: 'goodbye' },
           { text: '🛡️ Toggle Filter Member', id: 'autoapprove' },
         ],
       },
@@ -370,7 +365,6 @@ export async function handleGroupAutomationCommand({
     return true;
   }
 
-  // WELCOME & GOODBYE
   if (cmd === 'welcome') {
     cfg.welcome = !cfg.welcome;
     await saveMemory();
@@ -387,11 +381,7 @@ export async function handleGroupAutomationCommand({
 
   if (cmd === 'setwelcome') {
     if (!param) {
-      await sock.sendMessage(
-        jid,
-        { text: '⚠️ Contoh:\n`setwelcome Halo @user, selamat datang di @group! Member ke-@count`' },
-        { quoted: msg }
-      );
+      await sock.sendMessage(jid, { text: '⚠️ Contoh:\n`setwelcome Halo @user, selamat datang di @group! Member ke-@count`' }, { quoted: msg });
       return true;
     }
     cfg.welcomeText = param;
@@ -403,11 +393,7 @@ export async function handleGroupAutomationCommand({
 
   if (cmd === 'setgoodbye') {
     if (!param) {
-      await sock.sendMessage(
-        jid,
-        { text: '⚠️ Contoh:\n`setgoodbye Dadah @user, semoga sukses selalu!`' },
-        { quoted: msg }
-      );
+      await sock.sendMessage(jid, { text: '⚠️ Contoh:\n`setgoodbye Dadah @user, semoga sukses selalu!`' }, { quoted: msg });
       return true;
     }
     cfg.goodbyeText = param;
@@ -417,7 +403,6 @@ export async function handleGroupAutomationCommand({
     return true;
   }
 
-  // BUKA & TUTUP GRUP OTOMATIS
   if (cmd === 'autobuka') {
     if (!param) {
       await sock.sendMessage(jid, { text: '⚠️ Contoh: `autobuka 06:00` atau `autobuka off`' }, { quoted: msg });
@@ -435,7 +420,7 @@ export async function handleGroupAutomationCommand({
     }
     cfg.autoOpenTime = param;
     await saveMemory();
-    await sock.sendMessage(jid, { text: `🔓 Grup diatur **BUKA OTOMATIS** setiap pukul *${param} WIB*.` }, { quoted: msg });
+    await sock.sendMessage(jid, { text: `🔓 Grup diatur *BUKA OTOMATIS* setiap pukul *${param} WIB*.` }, { quoted: msg });
     return true;
   }
 
@@ -456,30 +441,85 @@ export async function handleGroupAutomationCommand({
     }
     cfg.autoCloseTime = param;
     await saveMemory();
-    await sock.sendMessage(jid, { text: `🔒 Grup diatur **TUTUP OTOMATIS** setiap pukul *${param} WIB*.` }, { quoted: msg });
+    await sock.sendMessage(jid, { text: `🔒 Grup diatur *TUTUP OTOMATIS* setiap pukul *${param} WIB*.` }, { quoted: msg });
     return true;
   }
 
-  // KEGIATAN GRUP OTOMATIS (MATERI / POLLING / JADWAL)
+  // AUTO-SYNC JADWAL DARI DESKRIPSI GRUP
+  if (cmd === 'syncjadwal') {
+    const targetTime = isValidTimeFormat(param) ? param : '19:00';
+    const desc = meta?.desc || '';
+    const dayRegex = /(senin|selasa|rabu|kamis|jumat|sabtu|minggu)[^:\n]*:\s*([^\n]+)/gi;
+    const found = [];
+    let match;
+    while ((match = dayRegex.exec(desc)) !== null) {
+      const dayName = match[1].toLowerCase();
+      const topic = match[2].replace(/[`*]/g, '').trim();
+      if (topic) found.push({ day: dayName, topic });
+    }
+
+    if (!found.length) {
+      await sock.sendMessage(
+        jid,
+        { text: '⚠️ Tidak ditemukan format jadwal `HARI : TOPIK` di deskripsi grup.' },
+        { quoted: msg }
+      );
+      return true;
+    }
+
+    for (const item of found) {
+      cfg.activities.push({
+        day: item.day,
+        time: targetTime,
+        type: 'materi',
+        content: `ai:${item.topic}`,
+      });
+    }
+    await saveMemory();
+
+    const summary = found.map((f) => `• *${f.day.toUpperCase()}* (${targetTime} WIB) → ${f.topic}`).join('\n');
+    await sock.sendMessage(
+      jid,
+      { text: `✅ *${found.length} JADWAL MATERI AI BERHASIL DIAKTIFKAN DARI DESKRIPSI GRUP!*\n\n${summary}\n\nKetik \`teskegiatan 1\` untuk uji coba langsung.` },
+      { quoted: msg }
+    );
+    return true;
+  }
+
+  // TAMBAH KEGIATAN MANUAL (SUPPORT HARI SPESIFIK ATAU SETIAP HARI)
   if (cmd === 'tambahkegiatan') {
     const parts = param.split('|').map((s) => s.trim());
-    if (parts.length < 3 || !isValidTimeFormat(parts[0])) {
+    if (parts.length < 3) {
       await sock.sendMessage(
         jid,
         {
           text:
             '⚠️ *Format Salah!* Gunakan:\n' +
-            '`tambahkegiatan <HH:mm> | <materi/poll/jadwal> | <isi>`\n\n' +
-            '*Contoh Materi AI:*\n`tambahkegiatan 08:00 | materi | ai:Tips belajar bahasa Inggris`\n' +
-            '*Contoh Polling:*\n`tambahkegiatan 12:00 | poll | Jam berapa mabar? ; 19.00 WIB ; 21.00 WIB`\n' +
-            '*Contoh Jadwal:*\n`tambahkegiatan 19:30 | jadwal | Diskusi rutin malam ini dimulai!`',
+            '`tambahkegiatan [hari] <HH:mm> | <materi/poll/jadwal> | <isi>`\n\n' +
+            '*Contoh Per Hari:*\n`tambahkegiatan selasa 19:00 | materi | ai:Matematika Dasar`\n' +
+            '*Contoh Setiap Hari:*\n`tambahkegiatan 08:00 | materi | ai:Motivasi belajar pagi`',
         },
         { quoted: msg }
       );
       return true;
     }
 
-    const time = parts[0];
+    const firstTokens = parts[0].toLowerCase().split(/\s+/);
+    let day = 'setiap_hari';
+    let time = '';
+
+    if (firstTokens.length === 2 && VALID_DAYS.includes(firstTokens[0])) {
+      day = firstTokens[0];
+      time = firstTokens[1];
+    } else {
+      time = firstTokens[0];
+    }
+
+    if (!isValidTimeFormat(time)) {
+      await sock.sendMessage(jid, { text: '❌ Format jam harus `HH:mm` (24 jam), contoh: `19:00` atau `selasa 19:00`' }, { quoted: msg });
+      return true;
+    }
+
     const type = parts[1].toLowerCase();
     const content = parts.slice(2).join(' | ');
 
@@ -497,11 +537,18 @@ export async function handleGroupAutomationCommand({
       return true;
     }
 
-    cfg.activities.push({ time, type: type === 'polling' ? 'poll' : type, content });
+    cfg.activities.push({ day, time, type: type === 'polling' ? 'poll' : type, content });
     await saveMemory();
     await sock.sendMessage(
       jid,
-      { text: `✅ Kegiatan otomatis ditambahkan!\n• Jam: *${time} WIB*\n• Jenis: *${type.toUpperCase()}*\n• Total jadwal: *${cfg.activities.length}*` },
+      {
+        text:
+          `✅ Kegiatan otomatis ditambahkan!\n` +
+          `• Hari: *${day.toUpperCase()}*\n` +
+          `• Jam: *${time} WIB*\n` +
+          `• Jenis: *${type.toUpperCase()}*\n` +
+          `• Total jadwal: *${cfg.activities.length}*`,
+      },
       { quoted: msg }
     );
     return true;
@@ -509,20 +556,29 @@ export async function handleGroupAutomationCommand({
 
   if (cmd === 'listkegiatan') {
     if (!cfg.activities.length) {
-      await sock.sendMessage(jid, { text: '📭 Belum ada jadwal kegiatan otomatis di grup ini.' }, { quoted: msg });
+      await sock.sendMessage(jid, { text: '📭 Belum ada jadwal kegiatan otomatis. Ketik `syncjadwal 19:00` untuk aktifkan dari deskripsi grup.' }, { quoted: msg });
       return true;
     }
     const listText = cfg.activities
-      .map((a, idx) => `*${idx + 1}.* [${a.time} WIB] *(${a.type.toUpperCase()})*\n    ${a.content.slice(0, 80)}`)
+      .map((a, idx) => {
+        const d = (a.day || 'setiap_hari').toUpperCase();
+        return `*${idx + 1}.* [${d} • ${a.time} WIB] *(${a.type.toUpperCase()})*\n    ${a.content.slice(0, 80)}`;
+      })
       .join('\n\n');
     await sock.sendMessage(jid, { text: `🗓️ *DAFTAR KEGIATAN OTOMATIS GRUP*\n\n${listText}` }, { quoted: msg });
     return true;
   }
 
   if (cmd === 'hapuskegiatan') {
+    if (param.toLowerCase() === 'semua') {
+      cfg.activities = [];
+      await saveMemory();
+      await sock.sendMessage(jid, { text: '🗑️ Semua jadwal kegiatan berhasil dihapus.' }, { quoted: msg });
+      return true;
+    }
     const idx = parseInt(param, 10) - 1;
     if (Number.isNaN(idx) || idx < 0 || idx >= cfg.activities.length) {
-      await sock.sendMessage(jid, { text: '⚠️ Masukkan nomor kegiatan yang valid. Cek di `listkegiatan`.' }, { quoted: msg });
+      await sock.sendMessage(jid, { text: '⚠️ Masukkan nomor kegiatan yang valid (atau `hapuskegiatan semua`).' }, { quoted: msg });
       return true;
     }
     const removed = cfg.activities.splice(idx, 1)[0];
@@ -541,7 +597,6 @@ export async function handleGroupAutomationCommand({
     return true;
   }
 
-  // SARING & PERSETUJUAN MEMBER MASUK
   if (cmd === 'autoapprove') {
     cfg.memberFilter.enabled = !cfg.memberFilter.enabled;
     await saveMemory();
@@ -581,10 +636,7 @@ export async function handleGroupAutomationCommand({
       if (val.toLowerCase() === 'all') {
         cfg.memberFilter.allowedPrefixes = [];
       } else {
-        cfg.memberFilter.allowedPrefixes = val
-          .split(',')
-          .map((p) => p.replace(/\D/g, ''))
-          .filter(Boolean);
+        cfg.memberFilter.allowedPrefixes = val.split(',').map((p) => p.replace(/\D/g, '')).filter(Boolean);
       }
       cfg.memberFilter.enabled = true;
       await saveMemory();
