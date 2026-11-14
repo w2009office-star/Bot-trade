@@ -17,6 +17,12 @@ import {
 } from './github_sync.js';
 
 import {
+  SPOTIFY_LIVE_BUTTON_IDS,
+  startSpotifyLiveSession,
+  handleSpotifyLiveButton,
+} from './spotify_live.js';
+
+import {
   fetchWithTimeout,
   fetchBuffer,
   extractUrl,
@@ -25,7 +31,6 @@ import {
   searchYouTube,
   downloadYouTube,
   downloadSocialMedia,
-  generateSpotifyPlayerCardBuffer,
   mediaBufferToWebpSticker,
   createBratSticker,
   urlOrTextToWebpSticker,
@@ -127,7 +132,7 @@ const bot = {
 };
 
 let dbMemory = {
-  version: 9.2,
+  version: 9.3,
   lastUpdateDate: '',
   updateLogs: [],
   users: {},
@@ -136,7 +141,7 @@ let dbMemory = {
   groupSettings: {},
   gameHighScores: { kuroslash: {}, sonic: {} },
   botSettings: { mode: 'public', autoread: false, autotyping: true, customBotName: '' },
-  healthReport: { lastChecked: '-', summary: '209/209 Fitur Valid + Signal Cipher Guard', details: {}, autoRepairs: [], totalRepairs: 0 },
+  healthReport: { lastChecked: '-', summary: '209/209 Fitur Valid + Spotify Live + Cipher Guard', details: {}, autoRepairs: [], totalRepairs: 0 },
 };
 
 async function loadMemory() {
@@ -173,11 +178,11 @@ async function jalankanEvolusiMandiri(paksaManual = false) {
   serverAutoHeal.updateProgressText = '🔄 SEDANG UPDATE SISTEM DI LAYAR BELAKANG...';
   dbMemory.version = Number((dbMemory.version + 0.1).toFixed(1));
   dbMemory.lastUpdateDate = hariIni;
-  const log = `v${dbMemory.version} (${hariIni}): 209 Fitur Valid + Signal Cipher Guard + GitHub Persistent Session.`;
+  const log = `v${dbMemory.version} (${hariIni}): 209 Fitur Valid + Spotify Live Lyrics + GitHub Persistent Session.`;
   dbMemory.updateLogs.unshift(log);
   await saveMemory();
   serverAutoHeal.isUpdating = false;
-  serverAutoHeal.updateProgressText = `✅ ${serverAutoHeal.validCount}/209 Fitur VALID & Cipher Guard Aktif`;
+  serverAutoHeal.updateProgressText = `✅ ${serverAutoHeal.validCount}/209 Fitur VALID & Spotify Live Aktif`;
   return log;
 }
 
@@ -210,6 +215,9 @@ initFeatures({
   userCooldowns,
   antiFloodTracker,
 });
+
+// Daftarkan perintah Spotify Live ke daftar perintah aktif
+['spotifylive', 'splive', 'play', 'play2', 'song', 'spotify'].forEach((c) => ALL_COMMANDS_SET.add(c));
 
 function getGroupConfig(jid) {
   if (!dbMemory.groupSettings[jid]) {
@@ -267,7 +275,7 @@ async function mintaKodePairing(sock, phone) {
 }
 
 // ============================================================
-// EKSEKUTOR SELURUH 209 FITUR VALID
+// EKSEKUTOR SELURUH 209 FITUR VALID & SPOTIFY LIVE
 // ============================================================
 async function prosesSatuPesan(sock, msg) {
   try {
@@ -320,8 +328,15 @@ async function prosesSatuPesan(sock, msg) {
       }
     }
 
-    // Kontrol Sentuh Game di Dalam Chat
     const cleanAction = textLower.replace(/^[.!/#]/, '').trim();
+
+    // Kontrol Tombol Spotify Live (Pause/Play, Prev, Next, Lirik, MP3, Stop)
+    if (SPOTIFY_LIVE_BUTTON_IDS.has(cleanAction)) {
+      await handleSpotifyLiveButton(sock, jid, cleanAction, msg);
+      return;
+    }
+
+    // Kontrol Sentuh Game di Dalam Chat
     if (cleanAction === 'stopgame' && gameSessions.has(jid)) {
       gameSessions.delete(jid);
       await sock.sendMessage(jid, { text: '🛑 Permainan dihentikan.' }, { quoted: msg });
@@ -446,12 +461,12 @@ async function prosesSatuPesan(sock, msg) {
                 ],
               },
               {
-                title: '🎮 GAME TOMBOL ASLI & KATEGORI',
+                title: '🎵 SPOTIFY LIVE & GAME TOMBOL ASLI',
                 rows: [
+                  { title: '🎧 Spotify Live (Video + Lirik)', description: 'Ketik: play <judul lagu> untuk lirik berjalan', id: 'downloadmenu' },
                   { title: '⚔️ Kuro Slash (Tombol Asli)', description: 'Main tebas Oni dengan tombol sentuh langsung', id: 'kuroslash' },
                   { title: '🌀 Speedy Dash (Tombol Asli)', description: 'Main Sonic kumpulkan Gold Rings di chat', id: 'sonic' },
                   { title: '🤖 Menu AI (28 Fitur)', description: 'GPT-5, Gemini, DeepSeek R1, Claude, Grok', id: 'aimenu' },
-                  { title: '📥 Menu Downloader (21 Fitur)', description: 'Play MP3, TikTok HD, CapCut, IG, FB', id: 'downloadmenu' },
                   { title: '🎨 Menu Sticker & Brat (21 Fitur)', description: 'Sticker, Brat, BratVid, QC, Logo', id: 'logomenu' },
                 ],
               },
@@ -576,7 +591,7 @@ async function prosesSatuPesan(sock, msg) {
         return;
       }
 
-      // 4. DOWNLOADER & PLAY AUDIO MP3 VALID (21 FITUR VALID)
+      // 4. DOWNLOADER & SPOTIFY LIVE (POTONGAN VIDEO KLIP + LIRIK BERJALAN + TOMBOL)
       if (['tiktok', 'tt', 'ttmp3', 'ttslide'].includes(cmd)) {
         const u = extractUrl(param);
         if (!u) { await sock.sendMessage(jid, { text: `⚠️ Contoh: \`${cmd} https://vt.tiktok.com/...\`` }, { quoted: msg }); return; }
@@ -625,29 +640,13 @@ async function prosesSatuPesan(sock, msg) {
         return;
       }
 
-      if (['play', 'play2', 'song', 'spotify'].includes(cmd)) {
-        if (!param) { await sock.sendMessage(jid, { text: `⚠️ Contoh: \`${cmd} hal l\`` }, { quoted: msg }); return; }
-        const list = await searchYouTube(param);
-        const first = list[0];
-        if (!first) { await sock.sendMessage(jid, { text: '❌ Lagu tidak ditemukan.' }, { quoted: msg }); return; }
-
-        lastPlaySession.set(jid, first);
-        const cardBuf = await generateSpotifyPlayerCardBuffer(first.title, first.author, first.thumbnail, first.duration);
-        const cap =
-          `🎧 *PLAYING FROM SEARCH*\n*${first.title}*\n${first.author} 🤍\n\n` +
-          `⚪──────────────────\n0:00                        ${first.duration}\n` +
-          `   🔀      ⏮      ⏸      ⏭      🔁`;
-
-        if (cardBuf) {
-          await sock.sendMessage(jid, { image: cardBuf, caption: cap, contextInfo: { forwardingScore: 999, isForwarded: true } }, { quoted: msg });
+      if (['play', 'play2', 'song', 'spotify', 'spotifylive', 'splive'].includes(cmd)) {
+        if (!param) {
+          await sock.sendMessage(jid, { text: `⚠️ Contoh: \`${cmd} hal l\`` }, { quoted: msg });
+          return;
         }
-
-        const aud = await downloadYouTube(first.url, true);
-        if (aud?.buffer) {
-          await sock.sendMessage(jid, { audio: aud.buffer, mimetype: 'audio/mpeg', ptt: false }, { quoted: msg });
-        } else {
-          await sock.sendMessage(jid, { text: `⚠️ Audio sedang padat. Tonton langsung: ${first.url}` }, { quoted: msg });
-        }
+        const first = await startSpotifyLiveSession(sock, jid, param, msg);
+        if (first) lastPlaySession.set(jid, first);
         return;
       }
 
@@ -1025,13 +1024,13 @@ async function start() {
   const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
   const { version } = await fetchLatestBaileysVersion();
 
-  console.log(`\n🤖 ${bot.userName} v${dbMemory.version} — ${ALL_COMMANDS_SET.size}/209 FITUR VALID + CIPHER GUARD\n`);
+  console.log(`\n🤖 ${bot.userName} v${dbMemory.version} — ${ALL_COMMANDS_SET.size}/209 FITUR VALID + SPOTIFY LIVE + CIPHER GUARD\n`);
 
   const sock = makeWASocket({
     version,
     auth: state,
     logger: pino({ level: 'silent' }),
-    browser: ['WHUXEN Bot', 'Chrome', '9.2.0'],
+    browser: ['WHUXEN Bot', 'Chrome', '9.3.0'],
     printQRInTerminal: false,
     getMessage: async (key) => sentMessageCache.get(key.id) || { conversation: '' },
   });
@@ -1104,7 +1103,7 @@ async function start() {
       bot.pairingCode = null;
       bot.userPhone = sock.user?.id ? sock.user.id.split(':')[0] : PHONE;
       scheduleAuthBackupToGitHub(AUTH_DIR);
-      console.log(`✅ [TERHUBUNG] ${bot.userPhone} — 209 Fitur, Cipher Guard & GitHub Sync Aktif`);
+      console.log(`✅ [TERHUBUNG] ${bot.userPhone} — 209 Fitur, Spotify Live, Cipher Guard & GitHub Sync Aktif`);
     } else if (connection === 'close') {
       bot.connected = false;
       const code = lastDisconnect?.error?.output?.statusCode;
