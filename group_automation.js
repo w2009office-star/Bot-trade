@@ -1,4 +1,4 @@
-import { sendNativeInteractiveButtons, panggilServerAISatSet } from './engines.js';
+import { fetchWithTimeout, sendNativeInteractiveButtons, panggilServerAISatSet } from './engines.js';
 
 export const GROUP_AUTO_COMMANDS = [
   'welcome',
@@ -12,6 +12,11 @@ export const GROUP_AUTO_COMMANDS = [
   'listkegiatan',
   'hapuskegiatan',
   'teskegiatan',
+  'tessemuakegiatan',
+  'testsemuakegiatan',
+  'interaksi',
+  'settema',
+  'tutupinteraksi',
   'autoapprove',
   'setfilter',
   'blacklistmember',
@@ -23,6 +28,26 @@ export const GROUP_AUTO_COMMANDS = [
 ];
 
 const VALID_DAYS = ['senin', 'selasa', 'rabu', 'kamis', 'jumat', 'sabtu', 'minggu', 'setiap_hari'];
+const botSentMsgIds = new Set();
+const groupChatHistory = new Map();
+const groupInteractionCooldown = new Map();
+
+function trackBotMessage(sentMsg) {
+  const id = sentMsg?.key?.id;
+  if (!id) return;
+  botSentMsgIds.add(id);
+  if (botSentMsgIds.size > 500) {
+    const oldest = botSentMsgIds.values().next().value;
+    botSentMsgIds.delete(oldest);
+  }
+}
+
+function pushGroupHistory(jid, senderName, text) {
+  if (!groupChatHistory.has(jid)) groupChatHistory.set(jid, []);
+  const hist = groupChatHistory.get(jid);
+  hist.push({ sender: senderName, text: text.slice(0, 350) });
+  if (hist.length > 10) hist.shift();
+}
 
 export function ensureGroupAutoConfig(dbMemory, jid) {
   if (!dbMemory.groupSettings[jid]) {
@@ -55,6 +80,16 @@ export function ensureGroupAutoConfig(dbMemory, jid) {
       blacklist: [],
     };
   }
+  // Mode interaksi diskusi: 'bebas' (nimbrung sesuai tema + reply), 'reply' (khusus reply/mention), 'off'
+  if (!cfg.interactiveMode) cfg.interactiveMode = 'bebas';
+  if (!cfg.interactiveSession) {
+    cfg.interactiveSession = {
+      active: false,
+      theme: '',
+      lastPrompt: '',
+      expiresAt: 0,
+    };
+  }
   return cfg;
 }
 
@@ -79,6 +114,36 @@ function getWibTimeAndDate() {
   return { time, date, day };
 }
 
+function resolveTodayTheme(cfg) {
+  const now = Date.now();
+  if (cfg.interactiveSession?.active && cfg.interactiveSession.theme) {
+    if (!cfg.interactiveSession.expiresAt || now < cfg.interactiveSession.expiresAt) {
+      return {
+        theme: cfg.interactiveSession.theme,
+        lastPrompt: cfg.interactiveSession.lastPrompt || '',
+        isLiveSession: true,
+      };
+    }
+  }
+  const { day } = getWibTimeAndDate();
+  const todayActs = (cfg.activities || []).filter(
+    (a) => (a.day || '').toLowerCase() === day || (a.day || '').toLowerCase() === 'setiap_hari'
+  );
+  if (todayActs.length > 0) {
+    const cleanTopic = todayActs[0].content.replace(/^ai:/i, '').trim();
+    return {
+      theme: `${day.toUpperCase()} — ${cleanTopic}`,
+      lastPrompt: cfg.interactiveSession?.lastPrompt || '',
+      isLiveSession: false,
+    };
+  }
+  return {
+    theme: 'Diskusi Belajar & Sharing Komunitas',
+    lastPrompt: '',
+    isLiveSession: false,
+  };
+}
+
 function formatWelcomeTemplate(template, { userTag, groupName, groupDesc, memberCount }) {
   return template
     .replace(/@user/gi, userTag)
@@ -89,6 +154,56 @@ function formatWelcomeTemplate(template, { userTag, groupName, groupDesc, member
 
 function isValidTimeFormat(str) {
   return /^([01]\d|2[0-3]):([0-5]\d)$/.test(str);
+}
+
+// ============================================================
+// AI ENGINE MULTI-FALLBACK (MATERI & INTERAKSI DISKUSI)
+// ============================================================
+async function askAIWithFallback(prompt, systemInstruction) {
+  try {
+    const primary = await panggilServerAISatSet(prompt, systemInstruction);
+    if (primary && primary.trim().length > 12) return primary.trim();
+  } catch {}
+
+  try {
+    const combined = `${systemInstruction}\n\n${prompt}`;
+    const res = await fetchWithTimeout(
+      `https://text.pollinations.ai/${encodeURIComponent(combined)}?model=openai`,
+      { headers: { 'User-Agent': 'WHUXEN-BOT/1.0' } },
+      15000
+    );
+    if (res.ok) {
+      const txt = await res.text();
+      if (txt && txt.trim().length > 12 && !txt.includes('<!DOCTYPE')) {
+        return txt.trim();
+      }
+    }
+  } catch {}
+
+  return null;
+}
+
+async function generateStudyMaterialAI(topic) {
+  const prompt =
+    `Buatkan materi pembuka diskusi untuk grup belajar WhatsApp dengan tema: "${topic}". ` +
+    `Format:\n` +
+    `1. Penjelasan inti yang ringkas & asyik\n` +
+    `2. 2-3 contoh praktis / kosakata / rumus\n` +
+    `3. 1 tantangan atau pertanyaan interaktif di bagian akhir agar para member langsung menjawab di chat.\n` +
+    `Gunakan Bahasa Indonesia santai-edukatif dan *bintang tunggal* untuk menebalkan poin.`;
+
+  const aiText = await askAIWithFallback(
+    prompt,
+    'Kamu adalah mentor sekaligus teman diskusi yang asyik di grup belajar WhatsApp.'
+  );
+  if (aiText) return aiText;
+
+  return (
+    `📌 *Topik Hari Ini:* ${topic}\n\n` +
+    `• Yuk kita bedah bareng materi *${topic}* hari ini!\n` +
+    `• Tulis jawaban, contoh kalimat, atau pertanyaanmu di bawah pesan ini nanti aku tanggapi langsung.\n\n` +
+    `💬 *Tantangan Awal:* Coba sebutkan 1 hal yang paling kamu pahami atau ingin tanyakan tentang *${topic}*!`
+  );
 }
 
 // ============================================================
@@ -122,13 +237,15 @@ export async function handleGroupParticipantsUpdate(sock, dbMemory, update) {
         });
         const ppUrl = await sock.profilePictureUrl(participant, 'image').catch(() => null);
         if (ppUrl) {
-          await sock.sendMessage(jid, {
+          const sent = await sock.sendMessage(jid, {
             image: { url: ppUrl },
             caption: text,
             mentions: [participant],
-          }).catch(() => {});
+          }).catch(() => null);
+          trackBotMessage(sent);
         } else {
-          await sock.sendMessage(jid, { text, mentions: [participant] }).catch(() => {});
+          const sent = await sock.sendMessage(jid, { text, mentions: [participant] }).catch(() => null);
+          trackBotMessage(sent);
         }
       } else if (action === 'remove') {
         const text = formatWelcomeTemplate(cfg.goodbyeText, {
@@ -137,7 +254,8 @@ export async function handleGroupParticipantsUpdate(sock, dbMemory, update) {
           groupDesc,
           memberCount,
         });
-        await sock.sendMessage(jid, { text, mentions: [participant] }).catch(() => {});
+        const sent = await sock.sendMessage(jid, { text, mentions: [participant] }).catch(() => null);
+        trackBotMessage(sent);
       }
     }
   } catch {}
@@ -196,55 +314,187 @@ export async function handleGroupJoinRequestEvent(sock, dbMemory, event) {
 }
 
 // ============================================================
-// 3. EKSEKUTOR KEGIATAN GRUP (MATERI AI / POLLING / JADWAL)
+// 3. EKSEKUTOR KEGIATAN GRUP + AKTIVASI SESI INTERAKSI TEMA
 // ============================================================
-async function executeGroupActivity(sock, jid, activity) {
+async function executeGroupActivity(sock, jid, activity, dbMemory = null, saveMemory = null) {
   const type = (activity.type || 'jadwal').toLowerCase();
   const content = activity.content || '';
-  const dayLabel = activity.day && activity.day !== 'setiap_hari' ? ` (${activity.day.toUpperCase()})` : '';
+  const dayName = (activity.day || 'setiap_hari').toUpperCase();
+  const dayLabel = dayName !== 'SETIAP_HARI' ? ` (${dayName})` : '';
+  const cleanTopic = content.replace(/^ai:/i, '').trim();
+
+  let sentMain = null;
+  let promptSummary = cleanTopic;
 
   if (type === 'poll' || type === 'polling') {
     const parts = content.split(';').map((s) => s.trim()).filter(Boolean);
     if (parts.length >= 3) {
-      await sock.sendMessage(jid, {
+      sentMain = await sock.sendMessage(jid, {
         poll: {
           name: `📊 ${parts[0]}`,
           values: parts.slice(1, 13),
           selectableCount: 1,
         },
       });
+      promptSummary = parts[0];
     }
-    return;
-  }
+  } else if (type === 'materi') {
+    const isAi = content.toLowerCase().startsWith('ai:');
 
-  if (type === 'materi') {
-    let materiText = content;
-    if (content.toLowerCase().startsWith('ai:')) {
-      const topic = content.slice(3).trim();
-      const generated = await panggilServerAISatSet(
-        `Buatkan materi belajar yang terstruktur, jelas, dan interaktif untuk grup belajar WhatsApp tentang topik: "${topic}". Sertakan penjelasan singkat, contoh praktis, dan 1 pertanyaan latihan di akhir agar member aktif berdiskusi.`,
-        'Kamu adalah tutor cerdas komunitas belajar WhatsApp. Gunakan format poin-poin yang rapi dan mudah dibaca di HP.'
+    if (/absensi/i.test(cleanTopic)) {
+      await sock.sendMessage(jid, {
+        poll: {
+          name: `📋 ABSENSI MEMBER${dayLabel} (${activity.time} WIB)`,
+          values: ['✅ Hadir & Siap Belajar', '⏳ Menyusul', '🙏 Izin'],
+          selectableCount: 1,
+        },
+      });
+      const motivText = await generateStudyMaterialAI('Motivasi belajar singkat & sapaan hangat untuk member yang absen');
+      sentMain = await sock.sendMessage(jid, {
+        text: `🔥 *MOTIVASI & SAPAAN${dayLabel}*\n\n${motivText}\n\n_Ceritain target belajarmu minggu ini di bawah ya!_`,
+      });
+      promptSummary = motivText;
+    } else if (/tanya jawab|interaksi member|free time/i.test(cleanTopic)) {
+      const sesiText = await generateStudyMaterialAI(
+        `${cleanTopic} — buat 3 pertanyaan kuis ringan dan pemantik obrolan seru untuk member grup`
       );
-      if (generated) materiText = generated;
+      sentMain = await sock.sendMessage(jid, {
+        text: `💬 *SESI INTERAKTIF${dayLabel}*\n🕒 Pukul: ${activity.time} WIB\n\n${sesiText}\n\n_Langsung balas pesan ini atau sebut namaku untuk ngobrol bareng!_`,
+      });
+      promptSummary = sesiText;
+    } else {
+      const materiText = isAi ? await generateStudyMaterialAI(cleanTopic) : cleanTopic;
+      sentMain = await sock.sendMessage(jid, {
+        text: `📚 *MATERI & DISKUSI TEMA*${dayLabel}\n🕒 Pukul: ${activity.time} WIB\n\n${materiText}\n\n_💬 Jawab pertanyaan di atas atau tanya langsung di chat, aku siap bantu bahas bareng!_`,
+      });
+      promptSummary = materiText;
     }
-    await sock.sendMessage(jid, {
-      text: `📚 *MATERI TERJADWAL AI*${dayLabel}\n🕒 Pukul: ${activity.time} WIB\n\n${materiText}`,
+  } else {
+    sentMain = await sock.sendMessage(jid, {
+      text: `🗓️ *PENGINGAT JADWAL GRUP*${dayLabel}\n⏰ Pukul ${activity.time} WIB\n\n${content}`,
     });
-    return;
   }
 
-  await sock.sendMessage(jid, {
-    text: `🗓️ *PENGINGAT JADWAL GRUP*${dayLabel}\n⏰ Pukul ${activity.time} WIB\n\n${content}`,
-  });
+  trackBotMessage(sentMain);
+  pushGroupHistory(jid, 'BOT', promptSummary.slice(0, 300));
+
+  // Otomatis aktifkan sesi interaksi tematik selama 3 jam ke depan
+  if (dbMemory) {
+    const cfg = ensureGroupAutoConfig(dbMemory, jid);
+    cfg.interactiveSession = {
+      active: true,
+      theme: `${dayName !== 'SETIAP_HARI' ? dayName + ' - ' : ''}${cleanTopic}`,
+      lastPrompt: promptSummary.slice(0, 500),
+      expiresAt: Date.now() + 3 * 60 * 60 * 1000,
+    };
+    if (typeof saveMemory === 'function') await saveMemory();
+  }
 }
 
 // ============================================================
-// 4. SCHEDULER OTOMATIS (BUKA/TUTUP GRUP + KEGIATAN PER HARI)
+// 4. INTERAKSI AKTIF BOT DENGAN MEMBER SESUAI TEMA JADWAL
+// ============================================================
+export async function handleGroupThemeInteraction({
+  sock,
+  jid,
+  senderParticipant,
+  pushName,
+  rawText,
+  unwrapped,
+  msg,
+  dbMemory,
+  bot,
+}) {
+  try {
+    if (!jid || !jid.endsWith('@g.us')) return false;
+    if (!rawText || rawText.length < 2) return false;
+
+    const cfg = ensureGroupAutoConfig(dbMemory, jid);
+    pushGroupHistory(jid, pushName, rawText);
+
+    if (cfg.interactiveMode === 'off') return false;
+
+    const ctxInfo = unwrapped?.extendedTextMessage?.contextInfo;
+    const quotedId = ctxInfo?.stanzaId || '';
+    const quotedParticipant = ctxInfo?.participant || '';
+    const mentionedJids = ctxInfo?.mentionedJid || [];
+
+    const botNum = (sock.user?.id || '').split(':')[0].split('@')[0].replace(/\D/g, '');
+    const botNameLower = (bot?.userName || 'whuxen').toLowerCase();
+    const textLower = rawText.toLowerCase();
+
+    const isReplyToBot =
+      (quotedId && botSentMsgIds.has(quotedId)) ||
+      (botNum && quotedParticipant.includes(botNum));
+    const isMentioningBot =
+      (botNum && mentionedJids.some((m) => m.includes(botNum))) ||
+      new RegExp(`\\b(${botNameLower.split(/\s+/)[0]}|bot|tutor|min|kak bot)\\b`, 'i').test(textLower);
+
+    const { theme, lastPrompt, isLiveSession } = resolveTodayTheme(cfg);
+
+    // Jika mode 'reply', hanya merespons kalau di-reply atau dipanggil
+    if (cfg.interactiveMode === 'reply' && !isReplyToBot && !isMentioningBot) {
+      return false;
+    }
+
+    // Jika mode 'bebas', merespons jika di-reply/dipanggil ATAU saat sesi tema sedang aktif
+    if (!isReplyToBot && !isMentioningBot && !isLiveSession) {
+      return false;
+    }
+
+    // Anti-spam cooldown 4 detik per grup
+    const lastHit = groupInteractionCooldown.get(jid) || 0;
+    if (Date.now() - lastHit < 4000) return false;
+    groupInteractionCooldown.set(jid, Date.now());
+
+    const recentChat = (groupChatHistory.get(jid) || [])
+      .map((m) => `${m.sender}: ${m.text}`)
+      .join('\n');
+
+    const systemPrompt =
+      `Kamu adalah ${bot?.userName || 'WHUXEN BOT'}, teman diskusi sekaligus fasilitator aktif di grup belajar WhatsApp.\n` +
+      `TEMA JADWAL SAAT INI: "${theme}"\n` +
+      (lastPrompt ? `KONTEKS MATERI/PERTANYAAN TERAKHIR YANG KAMU KIRIM:\n"${lastPrompt.slice(0, 350)}"\n\n` : '') +
+      `ATURAN INTERAKSI:\n` +
+      `1. Bersikaplah hangat, akrab, suportif, dan interaktif (bukan kaku seperti dosen/robot).\n` +
+      `2. Jika member menjawab soal/tantangan, apresiasi jawabannya, koreksi dengan ramah jika ada yang kurang tepat, lalu beri pertanyaan lanjutan atau ajak member lain ikut menanggapi.\n` +
+      `3. Sesuaikan gaya dengan tema hari itu (misal: jika tema Bahasa Jepang N5, selipkan kosakata Jepang + romaji + artinya; jika Bahasa Jerman A2, selipkan frasa Jerman + artinya; jika Matematika, bimbing langkah demi langkah; jika Free Time/Sharing, ngobrol santai & seru).\n` +
+      `4. Jika pesan member hanya obrolan singkat yang tidak nyambung dengan tema dan bukan ditujukan kepadamu, balas tepat dengan kata: SKIP\n` +
+      `5. Jaga jawaban tetap ringkas (maksimal 3-5 kalimat pendek) agar enak dibaca di grup chat.`;
+
+    const userPrompt =
+      `Riwayat obrolan terakhir di grup:\n${recentChat}\n\n` +
+      `Pesan terbaru dari ${pushName}: "${rawText}"\n` +
+      `Tanggapi ${pushName} secara natural sesuai tema "${theme}":`;
+
+    await sock.sendPresenceUpdate('composing', jid).catch(() => {});
+    const reply = await askAIWithFallback(userPrompt, systemPrompt);
+
+    if (!reply || /^skip$/i.test(reply.trim())) return false;
+
+    const sent = await sock.sendMessage(
+      jid,
+      {
+        text: reply,
+        mentions: [senderParticipant],
+      },
+      { quoted: msg }
+    );
+    trackBotMessage(sent);
+    pushGroupHistory(jid, 'BOT', reply);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// ============================================================
+// 5. SCHEDULER OTOMATIS (BUKA/TUTUP GRUP + KEGIATAN PER HARI)
 // ============================================================
 let schedulerStarted = false;
 const executedLog = new Set();
 
-export function startGroupAutomationScheduler(sock, dbMemory) {
+export function startGroupAutomationScheduler(sock, dbMemory, saveMemory = null) {
   if (schedulerStarted) return;
   schedulerStarted = true;
 
@@ -288,7 +538,7 @@ export function startGroupAutomationScheduler(sock, dbMemory) {
             const actKey = `act:${jid}:${i}:${todayWib}:${nowWib}`;
             if (!executedLog.has(actKey)) {
               executedLog.add(actKey);
-              await executeGroupActivity(sock, jid, act).catch(() => {});
+              await executeGroupActivity(sock, jid, act, dbMemory, saveMemory).catch(() => {});
             }
           }
         }
@@ -300,7 +550,7 @@ export function startGroupAutomationScheduler(sock, dbMemory) {
 }
 
 // ============================================================
-// 5. HANDLER PERINTAH ADMIN GRUP
+// 6. HANDLER PERINTAH ADMIN GRUP
 // ============================================================
 export async function handleGroupAutomationCommand({
   sock,
@@ -339,7 +589,84 @@ export async function handleGroupAutomationCommand({
 
   const cfg = ensureGroupAutoConfig(dbMemory, jid);
 
+  // KONTROL MODE INTERAKSI TEMATIK
+  if (cmd === 'interaksi') {
+    const mode = param.toLowerCase();
+    if (!['bebas', 'reply', 'off'].includes(mode)) {
+      const cur = resolveTodayTheme(cfg);
+      await sock.sendMessage(
+        jid,
+        {
+          text:
+            `💬 *PENGATURAN INTERAKSI BOT DI GRUP*\n` +
+            `• Mode Saat Ini: *${cfg.interactiveMode.toUpperCase()}*\n` +
+            `• Tema Aktif: *${cur.theme}*\n\n` +
+            `*Pilihan Mode:*\n` +
+            `• \`interaksi bebas\` — Bot aktif nimbrung diskusi saat sesi tema berjalan + saat di-reply/dipanggil\n` +
+            `• \`interaksi reply\` — Bot hanya membalas jika pesan bot di-reply atau namanya disebut\n` +
+            `• \`interaksi off\` — Matikan obrolan AI di grup\n` +
+            `• \`settema <judul>\` — Mulai sesi diskusi tema sekarang secara manual`,
+        },
+        { quoted: msg }
+      );
+      return true;
+    }
+    cfg.interactiveMode = mode;
+    await saveMemory();
+    await sock.sendMessage(
+      jid,
+      { text: `✅ Mode interaksi bot diubah menjadi: *${mode.toUpperCase()}*` },
+      { quoted: msg }
+    );
+    return true;
+  }
+
+  if (cmd === 'settema') {
+    if (!param) {
+      await sock.sendMessage(
+        jid,
+        { text: '⚠️ Contoh: `settema Bahasa Jepang N5 - Percakapan Sehari-hari`' },
+        { quoted: msg }
+      );
+      return true;
+    }
+    cfg.interactiveMode = cfg.interactiveMode === 'off' ? 'bebas' : cfg.interactiveMode;
+    cfg.interactiveSession = {
+      active: true,
+      theme: param,
+      lastPrompt: `Sesi diskusi manual dengan tema: ${param}`,
+      expiresAt: Date.now() + 3 * 60 * 60 * 1000,
+    };
+    await saveMemory();
+
+    const opener = await askAIWithFallback(
+      `Sapa para member grup WhatsApp dengan ramah dan buka sesi diskusi interaktif bertema "${param}". Ajukan 1 pertanyaan pembuka yang seru agar member langsung ikut nimbrung.`,
+      'Kamu adalah moderator sekaligus teman belajar yang seru di grup WhatsApp.'
+    );
+
+    const sent = await sock.sendMessage(
+      jid,
+      {
+        text:
+          `🎯 *SESI DISKUSI TEMA AKTIF (3 JAM)*\n` +
+          `📌 Tema: *${param}*\n\n` +
+          `${opener || `Halo semuanya! Yuk kita ngobrol dan diskusi bareng seputar *${param}*. Ada yang mau mulai duluan?`}`,
+      },
+      { quoted: msg }
+    );
+    trackBotMessage(sent);
+    return true;
+  }
+
+  if (cmd === 'tutupinteraksi') {
+    cfg.interactiveSession = { active: false, theme: '', lastPrompt: '', expiresAt: 0 };
+    await saveMemory();
+    await sock.sendMessage(jid, { text: '🛑 Sesi diskusi tema aktif telah ditutup.' }, { quoted: msg });
+    return true;
+  }
+
   if (cmd === 'panelgrup') {
+    const cur = resolveTodayTheme(cfg);
     await sendNativeInteractiveButtons(
       sock,
       jid,
@@ -347,17 +674,17 @@ export async function handleGroupAutomationCommand({
         title: '⚙️ PANEL OTOMATISASI GRUP',
         body:
           `📌 *Grup:* ${meta?.subject || 'Grup'}\n` +
-          `• *Welcome Masuk:* ${cfg.welcome ? 'ON ✅' : 'OFF ❌'}\n` +
-          `• *Goodbye Keluar:* ${cfg.goodbye ? 'ON ✅' : 'OFF ❌'}\n` +
-          `• *Auto Buka:* ${cfg.autoOpenTime || 'Nonaktif'}\n` +
-          `• *Auto Tutup:* ${cfg.autoCloseTime || 'Nonaktif'}\n` +
-          `• *Filter & ACC Member:* ${cfg.memberFilter.enabled ? 'ON ✅' : 'OFF ❌'} (Prefix: ${cfg.memberFilter.allowedPrefixes.join(',') || 'Semua'})\n` +
+          `• *Mode Interaksi:* ${cfg.interactiveMode.toUpperCase()} (${cur.isLiveSession ? 'Sesi Live 🟢' : 'Standby'})\n` +
+          `• *Tema Hari Ini:* ${cur.theme}\n` +
+          `• *Welcome / Goodbye:* ${cfg.welcome ? 'ON' : 'OFF'} / ${cfg.goodbye ? 'ON' : 'OFF'}\n` +
+          `• *Auto Buka / Tutup:* ${cfg.autoOpenTime || '-'} / ${cfg.autoCloseTime || '-'}\n` +
+          `• *Filter & ACC Member:* ${cfg.memberFilter.enabled ? 'ON ✅' : 'OFF ❌'}\n` +
           `• *Kegiatan Terjadwal:* ${cfg.activities.length} jadwal`,
-        footer: 'Ketik listkegiatan atau syncjadwal 19:00 untuk kelola materi AI',
+        footer: 'Gunakan settema <topik> atau teskegiatan semua',
         buttons: [
+          { text: '🚀 Tes Semua Kegiatan', id: 'tessemuakegiatan' },
           { text: '📋 List Kegiatan', id: 'listkegiatan' },
           { text: '👋 Toggle Welcome', id: 'welcome' },
-          { text: '🛡️ Toggle Filter Member', id: 'autoapprove' },
         ],
       },
       msg
@@ -445,7 +772,6 @@ export async function handleGroupAutomationCommand({
     return true;
   }
 
-  // AUTO-SYNC JADWAL DARI DESKRIPSI GRUP
   if (cmd === 'syncjadwal') {
     const targetTime = isValidTimeFormat(param) ? param : '19:00';
     const desc = meta?.desc || '';
@@ -480,13 +806,12 @@ export async function handleGroupAutomationCommand({
     const summary = found.map((f) => `• *${f.day.toUpperCase()}* (${targetTime} WIB) → ${f.topic}`).join('\n');
     await sock.sendMessage(
       jid,
-      { text: `✅ *${found.length} JADWAL MATERI AI BERHASIL DIAKTIFKAN DARI DESKRIPSI GRUP!*\n\n${summary}\n\nKetik \`teskegiatan 1\` untuk uji coba langsung.` },
+      { text: `✅ *${found.length} JADWAL MATERI AI BERHASIL DIAKTIFKAN DARI DESKRIPSI GRUP!*\n\n${summary}\n\nKetik \`teskegiatan semua\` untuk uji coba langsung.` },
       { quoted: msg }
     );
     return true;
   }
 
-  // TAMBAH KEGIATAN MANUAL (SUPPORT HARI SPESIFIK ATAU SETIAP HARI)
   if (cmd === 'tambahkegiatan') {
     const parts = param.split('|').map((s) => s.trim());
     if (parts.length < 3) {
@@ -587,13 +912,48 @@ export async function handleGroupAutomationCommand({
     return true;
   }
 
-  if (cmd === 'teskegiatan') {
-    const idx = parseInt(param, 10) - 1;
-    if (Number.isNaN(idx) || idx < 0 || idx >= cfg.activities.length) {
-      await sock.sendMessage(jid, { text: '⚠️ Masukkan nomor kegiatan yang valid. Contoh: `teskegiatan 1`' }, { quoted: msg });
+  if (cmd === 'teskegiatan' || cmd === 'tessemuakegiatan' || cmd === 'testsemuakegiatan') {
+    if (!cfg.activities.length) {
+      await sock.sendMessage(
+        jid,
+        { text: '📭 Belum ada jadwal kegiatan yang tersimpan. Jalankan `syncjadwal 19:00` atau `tambahkegiatan` dulu.' },
+        { quoted: msg }
+      );
       return true;
     }
-    await executeGroupActivity(sock, jid, cfg.activities[idx]);
+
+    const runAll =
+      cmd === 'tessemuakegiatan' ||
+      cmd === 'testsemuakegiatan' ||
+      param.toLowerCase() === 'semua' ||
+      param.toLowerCase() === 'all';
+
+    if (runAll) {
+      await sock.sendMessage(
+        jid,
+        { text: `🚀 *Menjalankan tes untuk ${cfg.activities.length} kegiatan terjadwal...*` },
+        { quoted: msg }
+      );
+      for (let i = 0; i < cfg.activities.length; i++) {
+        await executeGroupActivity(sock, jid, cfg.activities[i], dbMemory, saveMemory).catch(() => {});
+        if (i < cfg.activities.length - 1) {
+          await new Promise((resolve) => setTimeout(resolve, 3500));
+        }
+      }
+      await sock.sendMessage(jid, { text: '✅ *Semua kegiatan terjadwal berhasil dites!*' }, { quoted: msg });
+      return true;
+    }
+
+    const idx = parseInt(param, 10) - 1;
+    if (Number.isNaN(idx) || idx < 0 || idx >= cfg.activities.length) {
+      await sock.sendMessage(
+        jid,
+        { text: '⚠️ Masukkan nomor kegiatan atau ketik `teskegiatan semua`.\nContoh: `teskegiatan 1` atau `teskegiatan semua`' },
+        { quoted: msg }
+      );
+      return true;
+    }
+    await executeGroupActivity(sock, jid, cfg.activities[idx], dbMemory, saveMemory);
     return true;
   }
 
