@@ -49,10 +49,13 @@ const MEMORY_FILE = './memory.json';
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY || '';
 const OWNER_NAME = process.env.OWNER_NAME || 'Owner Bot';
 const CHANNEL_URL = process.env.CHANNEL_URL || 'https://whatsapp.com/channel/0029Va8';
+const MENU_BANNER_LINK = process.env.MENU_BANNER_LINK || '';
 const PUBLIC_URL = (
   process.env.RAILWAY_PUBLIC_DOMAIN
     ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}`
-    : process.env.PUBLIC_URL || ''
+    : process.env.RAILWAY_STATIC_URL
+    ? `https://${process.env.RAILWAY_STATIC_URL.replace(/^https?:\/\//, '')}`
+    : process.env.RENDER_EXTERNAL_URL || process.env.PUBLIC_URL || ''
 ).replace(/\/$/, '');
 
 const bot = {
@@ -63,7 +66,7 @@ const bot = {
   pairingCode: null,
   startTime: Date.now(),
   userPhone: null,
-  userName: 'NEXA-AI BOT',
+  userName: 'WHUXEN BOT',
 
   stats: {
     totalDeletedBadWords: 0,
@@ -87,7 +90,7 @@ const bot = {
 // 2. SISTEM MEMORI PERMANEN, HIGH SCORE GAME & SELF-TEST
 // ============================================================
 let dbMemory = {
-  version: 6.0,
+  version: 6.5,
   lastUpdateDate: '',
   updateLogs: [],
   users: {},
@@ -160,7 +163,7 @@ async function jalankanEvolusiMandiri(paksaManual = false) {
     if (!dbMemory.learnedWords.includes(k)) dbMemory.learnedWords.push(k);
   });
 
-  const pesanLog = `v${dbMemory.version} (${hariIni}): Arsitektur 2-File Modular, Perbaikan Klik Tombol, Link-to-HD Short Video, & Layar Tap Langsung.`;
+  const pesanLog = `v${dbMemory.version} (${hariIni}): HD Moving Video Menu, Rich Interactive UI Dropdown, & Auto-HTTPS Layar Tap.`;
   dbMemory.updateLogs.unshift(pesanLog);
   if (dbMemory.updateLogs.length > 10) dbMemory.updateLogs.pop();
 
@@ -178,7 +181,7 @@ async function jalankanBackgroundSelfTest() {
     { name: 'Cuaca Indonesia', fn: async () => Boolean((await getCuacaIndonesia('Bekasi'))?.caption) },
     { name: 'Jadwal Sholat Kemenag', fn: async () => Boolean(await getJadwalSholatIndonesia('Jakarta')) },
     { name: 'Al-Quran & Murattal', fn: async () => Boolean((await getSurahLengkap('1'))?.text) },
-    { name: 'Layar Tap & Anti-Virtek', fn: async () => true },
+    { name: 'HD Video & Layar Tap', fn: async () => true },
   ];
 
   let pass = 0;
@@ -296,7 +299,7 @@ function mapButtonDisplayTextToCommand(text) {
 function extractIncomingTextAndButton(msg) {
   const m = unwrapMessageContent(msg.message);
 
-  // 1. Baca ID resmi dari Native Flow Button
+  // 1. Baca ID resmi dari Native Flow Button (quick_reply & single_select)
   const nativeResponse = m.interactiveResponseMessage?.nativeFlowResponseMessage;
   if (nativeResponse?.paramsJson) {
     try {
@@ -638,42 +641,90 @@ function pasangPenjawab(sock) {
             await sock.sendPresenceUpdate('composing', jid);
           }
 
-          // === MAIN & MENU ===
+          // === MAIN & MENU (VIDEO BERGERAK HD + RICH INTERACTIVE UI) ===
           if (cmd === 'menu' || cmd === 'help') {
-            const bannerUrl = `https://dummyimage.com/1280x720/090d16/38bdf8.png&text=${encodeURIComponent(bot.userName + ' • v' + dbMemory.version)}`;
-            const hdMedia = await convertLinkToHdShortVideo(bannerUrl, bot.userName);
+            const bannerSource =
+              MENU_BANNER_LINK ||
+              `https://dummyimage.com/1280x720/090d16/38bdf8.png&text=${encodeURIComponent(bot.userName + ' • v' + dbMemory.version)}`;
+            const hdMedia = await convertLinkToHdShortVideo(bannerSource, bot.userName, !MENU_BANNER_LINK);
 
-            const captionMenu =
+            const videoHeaderCaption =
               `*╭┈───〔 ${bot.userName} 〕┈───⊷*\n` +
               `*├✦ Owner:* ${OWNER_NAME}\n` +
-              `*├✦ Commands:* ${ALL_COMMANDS_SET.size}\n` +
+              `*├✦ Commands:* ${ALL_COMMANDS_SET.size} Fitur\n` +
               `*├✦ Runtime:* ${getUptime()}\n` +
-              `*├✦ Mode:* ${dbMemory.botSettings.mode}\n` +
+              `*├✦ Mode:* ${dbMemory.botSettings.mode.toUpperCase()}\n` +
               `*├✦ Status API:* ${dbMemory.healthReport.summary}\n` +
               `*╰───────────────────⊷*\n\n` +
-              `ʜᴇʟʟᴏ *@${senderParticipant.split('@')[0]}* 👋\n` +
-              `ᴘɪʟɪʜ ᴛᴏᴍʙᴏʟ ᴄᴇᴘᴀᴛ ᴅɪ ʙᴀᴡᴀʜ ᴀᴛᴀᴜ ᴋᴇᴛɪᴋ ɴᴀᴍᴀ ᴍᴇɴᴜ:\n` +
-              `• *allmenu* | *aimenu* | *downloadmenu*\n` +
-              `• *searchmenu* | *animemenu* | *funmenu*\n` +
-              `• *groupmenu* | *logomenu* | *toolsmenu* | *ownermenu*`;
+              `Halo *@${senderParticipant.split('@')[0]}* 👋`;
+
+            // 1. Kirim Video Pendek Animasi HD (berputar otomatis di chat)
+            if (hdMedia?.type === 'video' && hdMedia.buffer) {
+              await sock.sendMessage(
+                jid,
+                {
+                  video: hdMedia.buffer,
+                  gifPlayback: true,
+                  mimetype: 'video/mp4',
+                  caption: videoHeaderCaption,
+                  mentions: [senderParticipant],
+                },
+                { quoted: msg }
+              );
+            } else if (hdMedia?.buffer) {
+              await sock.sendMessage(
+                jid,
+                {
+                  image: hdMedia.buffer,
+                  caption: videoHeaderCaption,
+                  mentions: [senderParticipant],
+                },
+                { quoted: msg }
+              );
+            }
+
+            // 2. Kirim Rich Interactive UI Card yang rapi dengan Dropdown Kategori & Layar Tap
+            const publicBase = getLivePublicUrl();
+            const kuroTapUrl = publicBase ? `${publicBase}/arcade/kuroslash?user=${senderNum}` : '';
+
+            const menuSections = [
+              {
+                title: '📌 DAFTAR MENU & LAYAR TAP',
+                rows: [
+                  { title: '📋 Semua Perintah (All Menu)', description: 'Tampilkan seluruh daftar perintah lengkap', id: 'allmenu' },
+                  { title: '⚔️ Layar Tap: Kuro Slash', description: 'Main game tebas Oni dengan kontrol sentuh', id: 'kuroslash' },
+                  { title: '🌀 Layar Tap: Speedy Dash', description: 'Main game Sonic kumpulkan Gold Rings', id: 'sonic' },
+                  { title: '🤖 Menu AI & ChatGPT/Gemini', description: 'Asisten pintar, koding, matematika & memori', id: 'aimenu' },
+                  { title: '📥 Menu Downloader & Spotify', description: 'TikTok HD, YouTube MP3/MP4, Spotify Player', id: 'downloadmenu' },
+                  { title: '🔍 Menu Search & Islami', description: 'Cuaca BMKG, Jadwal Sholat, Al-Quran, Wiki', id: 'searchmenu' },
+                  { title: '🛡️ Menu Keamanan Grup', description: 'Anti-Virtek, Anti-Bug, Anti-Link & Admin', id: 'groupmenu' },
+                  { title: '🎬 Menu Animasi HD & Logo', description: 'Ubah link jadi video animasi HD & font', id: 'logomenu' },
+                  { title: '🛠️ Menu Tools & Utilitas', description: 'QR Code, Stiker, Kalkulator, Terjemahan', id: 'toolsmenu' },
+                ],
+              },
+            ];
+
+            const quickBtns = [
+              { text: '⚔️ Game Kuro Slash', id: 'kuroslash' },
+              { text: '🌀 Game Speedy Dash', id: 'sonic' },
+              { text: '⚡ Cek Speed / Ping', id: 'ping' },
+            ];
+            if (kuroTapUrl) {
+              quickBtns.unshift({ text: '📱 Layar Tap Fullscreen', url: kuroTapUrl });
+            } else if (CHANNEL_URL.startsWith('https://')) {
+              quickBtns.push({ text: `↗️ Saluran ${bot.userName}`, url: CHANNEL_URL });
+            }
 
             await sendInteractiveButtons(
               sock,
               jid,
               {
-                title: `📋 MENU UTAMA ${bot.userName}`,
-                body: captionMenu,
+                title: `🎛️ PANEL KONTROL ${bot.userName}`,
+                body: `Pilih kategori fitur lewat daftar di bawah atau sentuh tombol game Layar Tap langsung:`,
                 footer: `© ${bot.userName}`,
-                videoBuffer: hdMedia?.type === 'video' ? hdMedia.buffer : null,
-                imageBuffer: hdMedia?.type === 'image' ? hdMedia.buffer : null,
-                mentions: [senderParticipant],
-                buttons: [
-                  { text: `📋 Buka Menu ${bot.userName}`, id: 'allmenu' },
-                  { text: '⚔️ Game Kuro Slash', id: 'kuroslash' },
-                  { text: '🌀 Game Speedy Dash', id: 'sonic' },
-                  { text: '⚡ Cek Speed / Ping', id: 'ping' },
-                  { text: `↗️ Saluran ${bot.userName}`, url: CHANNEL_URL },
-                ],
+                sections: menuSections,
+                listTitle: '📂 Buka Daftar Menu',
+                buttons: quickBtns,
               },
               msg
             );
@@ -867,7 +918,10 @@ function pasangPenjawab(sock) {
             if (!first) { await sock.sendMessage(jid, { text: '❌ Lagu tidak ditemukan.' }, { quoted: msg }); continue; }
 
             lastPlaySession.set(jid, first);
-            const spotifyScreenUrl = `${getLivePublicUrl()}/player?q=${encodeURIComponent(first.title)}&artist=${encodeURIComponent(first.author)}&vid=${encodeURIComponent(first.videoId || '')}&dur=${encodeURIComponent(first.duration)}`;
+            const publicBase = getLivePublicUrl();
+            const spotifyScreenUrl = publicBase
+              ? `${publicBase}/player?q=${encodeURIComponent(first.title)}&artist=${encodeURIComponent(first.author)}&vid=${encodeURIComponent(first.videoId || '')}&dur=${encodeURIComponent(first.duration)}`
+              : '';
 
             const playerCardText =
               `🎧 *SPOTIFY & YT MUSIC AUDIO*\n` +
@@ -880,6 +934,14 @@ function pasangPenjawab(sock) {
               `────────────────────\n` +
               `_⏳ Mengirimkan file audio lagu..._`;
 
+            const playBtns = [
+              { text: '🎬 Unduh Video MP4', id: 'ytmp4' },
+              { text: `📋 Menu ${bot.userName}`, id: 'menu' },
+            ];
+            if (spotifyScreenUrl) {
+              playBtns.unshift({ text: '📱 Buka Layar Spotify', url: spotifyScreenUrl });
+            }
+
             await sendInteractiveButtons(
               sock,
               jid,
@@ -888,11 +950,7 @@ function pasangPenjawab(sock) {
                 body: playerCardText,
                 footer: `support terus ${bot.userName} yaaa`,
                 imageUrl: first.thumbnail,
-                buttons: [
-                  { text: '📱 Buka Layar Spotify', url: spotifyScreenUrl },
-                  { text: '🎬 Unduh Video MP4', id: 'ytmp4' },
-                  { text: `📋 Menu ${bot.userName}`, id: 'menu' },
-                ],
+                buttons: playBtns,
               },
               msg
             );
@@ -1028,7 +1086,7 @@ function pasangPenjawab(sock) {
             const best = dbMemory.gameHighScores.kuroslash[senderNum] || 0;
             const state = { type: 'kuroslash', lane: 1, hp: 100, score: 0, best, ulti: 30, speed: 5.5 };
             gameSessions.set(jid, state);
-            await kirimTampilanKuroSlash(sock, jid, senderNum, state, 'Arena Kuro Slash dimulai! Sentuh Layar Tap Langsung atau tombol aksi.', msg);
+            await kirimTampilanKuroSlash(sock, jid, senderNum, state, 'Arena Kuro Slash dimulai! Sentuh tombol atau Layar Tap Fullscreen.', msg);
             continue;
           }
 
@@ -1036,7 +1094,7 @@ function pasangPenjawab(sock) {
             const best = dbMemory.gameHighScores.sonic[senderNum] || 0;
             const state = { type: 'sonic', rings: 10, score: 0, best, speed: 6.2, laserAlert: false };
             gameSessions.set(jid, state);
-            await kirimTampilanSonic(sock, jid, senderNum, state, 'Emerald Coast Run dimulai! Sentuh Layar Tap Langsung atau tombol aksi.', msg);
+            await kirimTampilanSonic(sock, jid, senderNum, state, 'Emerald Coast Run dimulai! Sentuh tombol atau Layar Tap Fullscreen.', msg);
             continue;
           }
 
@@ -1201,15 +1259,24 @@ function pasangPenjawab(sock) {
             continue;
           }
 
-          // === LOGO, FONT & KONVERTER LINK KE VIDEO PENDEK HD ===
+          // === LOGO, FONT & KONVERTER LINK KE VIDEO PENDEK ANIMASI HD ===
           if (cmd === 'animasi' || cmd === 'linkvideo') {
             const targetLink = extractUrl(param);
             const label = targetLink ? 'HD LINK ANIMATION' : param || bot.userName;
             await sock.sendMessage(jid, { text: '🎬 Mengonversi link menjadi Video Pendek Animasi HD...' }, { quoted: msg });
-            const hdResult = await convertLinkToHdShortVideo(targetLink, label);
-            if (hdResult?.type === 'video') {
-              await sock.sendMessage(jid, { video: hdResult.buffer, gifPlayback: true, caption: `✨ *Video Pendek Animasi HD*` }, { quoted: msg });
-            } else if (hdResult?.type === 'image') {
+            const hdResult = await convertLinkToHdShortVideo(targetLink, label, false);
+            if (hdResult?.type === 'video' && hdResult.buffer) {
+              await sock.sendMessage(
+                jid,
+                {
+                  video: hdResult.buffer,
+                  gifPlayback: true,
+                  mimetype: 'video/mp4',
+                  caption: `✨ *Video Pendek Animasi HD*\n${targetLink ? `🔗 Sumber: ${targetLink}` : `🏷️ ${label}`}`,
+                },
+                { quoted: msg }
+              );
+            } else if (hdResult?.buffer) {
               await sock.sendMessage(jid, { image: hdResult.buffer, caption: `✨ *Kartu Visual HD*` }, { quoted: msg });
             } else {
               await sock.sendMessage(jid, { text: '❌ Gagal memproses link menjadi animasi HD.' }, { quoted: msg });
@@ -1415,7 +1482,7 @@ async function start() {
     version,
     auth: state,
     logger: pino({ level: 'silent' }),
-    browser: ['NEXA-AI Bot', 'Chrome', '6.0.0'],
+    browser: ['WHUXEN Bot', 'Chrome', '6.5.0'],
     printQRInTerminal: false,
   });
 
