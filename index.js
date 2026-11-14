@@ -10,6 +10,13 @@ import makeWASocket, {
 import pino from 'pino';
 
 import {
+  restoreAuthFromGitHub,
+  scheduleAuthBackupToGitHub,
+  startGitHubLiveHotReload,
+  setupGracefulShutdown,
+} from './github_sync.js';
+
+import {
   fetchWithTimeout,
   fetchBuffer,
   extractUrl,
@@ -32,6 +39,7 @@ import {
   initFeatures,
   serverAutoHeal,
   recordAutoRepair,
+  repairSignalSessionForJid,
   jalankanAudit209FiturRealTime,
   MENU_CATEGORIES,
   ALL_COMMANDS_SET,
@@ -50,13 +58,44 @@ import {
   mulaiWeb,
 } from './features.js';
 
+// ============================================================
+// PENYADAP REAL-TIME ERROR DEKRIPSI ("MENUNGGU PESAN INI" / BAD MAC)
+// ============================================================
+let cipherRepairLock = false;
+async function triggerAutoCipherHeal(jid = '', reason = 'Bad MAC / Decryption Failure') {
+  if (cipherRepairLock) return;
+  cipherRepairLock = true;
+  try {
+    await repairSignalSessionForJid(jid, reason);
+  } finally {
+    setTimeout(() => {
+      cipherRepairLock = false;
+    }, 4000);
+  }
+}
+
+const origConsoleError = console.error;
+console.error = (...args) => {
+  const joined = args.map((a) => (a?.message ? a.message : String(a))).join(' ');
+  if (/Bad MAC|SessionError|No matching sessions|Invalid PreKey|decrypt/i.test(joined)) {
+    triggerAutoCipherHeal('', 'Console Signal Decryption Error').catch(() => {});
+  }
+  origConsoleError.apply(console, args);
+};
+
 process.on('uncaughtException', (err) => {
-  recordAutoRepair('ProcessGuard', err?.message || 'Error', 'Proses tetap berjalan normal');
+  const msg = err?.message || 'Error';
+  if (/Bad MAC|SessionError|No matching sessions|Invalid PreKey/i.test(msg)) {
+    triggerAutoCipherHeal('', msg.slice(0, 45)).catch(() => {});
+    return;
+  }
+  recordAutoRepair('ProcessGuard', msg, 'Proses tetap berjalan normal');
 });
+
 process.on('unhandledRejection', (reason) => {
   const msg = reason?.message || String(reason);
-  if (/Bad MAC|SessionError|No sessions|Timed Out/i.test(msg)) {
-    recordAutoRepair('SessionGuard', msg.slice(0, 40), 'Sesi enkripsi dipulihkan');
+  if (/Bad MAC|SessionError|No sessions|No matching sessions|Invalid PreKey|Timed Out/i.test(msg)) {
+    triggerAutoCipherHeal('', msg.slice(0, 45)).catch(() => {});
   }
 });
 
@@ -88,7 +127,7 @@ const bot = {
 };
 
 let dbMemory = {
-  version: 9.0,
+  version: 9.2,
   lastUpdateDate: '',
   updateLogs: [],
   users: {},
@@ -97,7 +136,7 @@ let dbMemory = {
   groupSettings: {},
   gameHighScores: { kuroslash: {}, sonic: {} },
   botSettings: { mode: 'public', autoread: false, autotyping: true, customBotName: '' },
-  healthReport: { lastChecked: '-', summary: '209/209 Fitur Valid', details: {}, autoRepairs: [], totalRepairs: 0 },
+  healthReport: { lastChecked: '-', summary: '209/209 Fitur Valid + Signal Cipher Guard', details: {}, autoRepairs: [], totalRepairs: 0 },
 };
 
 async function loadMemory() {
@@ -134,11 +173,11 @@ async function jalankanEvolusiMandiri(paksaManual = false) {
   serverAutoHeal.updateProgressText = '🔄 SEDANG UPDATE SISTEM DI LAYAR BELAKANG...';
   dbMemory.version = Number((dbMemory.version + 0.1).toFixed(1));
   dbMemory.lastUpdateDate = hariIni;
-  const log = `v${dbMemory.version} (${hariIni}): 209 Fitur Valid, Audio MP3 Fix, TikTok/CapCut Resolver, & Native Buttons.`;
+  const log = `v${dbMemory.version} (${hariIni}): 209 Fitur Valid + Signal Cipher Guard + GitHub Persistent Session.`;
   dbMemory.updateLogs.unshift(log);
   await saveMemory();
   serverAutoHeal.isUpdating = false;
-  serverAutoHeal.updateProgressText = `✅ ${serverAutoHeal.validCount}/209 Fitur VALID & Aktif`;
+  serverAutoHeal.updateProgressText = `✅ ${serverAutoHeal.validCount}/209 Fitur VALID & Cipher Guard Aktif`;
   return log;
 }
 
@@ -146,6 +185,18 @@ const gameSessions = new Map();
 const userCooldowns = new Map();
 const antiFloodTracker = new Map();
 const lastPlaySession = new Map();
+const sentMessageCache = new Map();
+const lastReplyTextByJid = new Map();
+const retryCooldownByJid = new Map();
+
+function rememberOutgoingMessage(keyId, messageObj) {
+  if (!keyId || !messageObj) return;
+  sentMessageCache.set(keyId, messageObj);
+  if (sentMessageCache.size > 300) {
+    const oldestKey = sentMessageCache.keys().next().value;
+    sentMessageCache.delete(oldestKey);
+  }
+}
 
 initFeatures({
   bot,
@@ -334,6 +385,17 @@ async function prosesSatuPesan(sock, msg) {
     if (ALL_COMMANDS_SET.has(cmd)) {
       if (dbMemory.botSettings.autotyping) sock.sendPresenceUpdate('composing', jid).catch(() => {});
 
+      // FITUR KHUSUS: RESET KUNCI ENKRIPSI ("MENUNGGU PESAN INI")
+      if (cmd === 'fixsession') {
+        const deleted = await repairSignalSessionForJid(jid, 'Perintah Manual fixsession');
+        await sock.sendMessage(
+          jid,
+          { text: `🔐 *SIGNAL CIPHER DI-RESET!*\n• Kunci sesi dibersihkan: *${deleted} file*\n• Status: Enkripsi chat sudah disinkronkan ulang.` },
+          { quoted: msg }
+        );
+        return;
+      }
+
       // 1. MENU UTAMA DENGAN TOMBOL ASLI + INDIKATOR UPDATE LAYAR BELAKANG
       if (cmd === 'menu' || cmd === 'help') {
         const dt = getIndonesianFullDateTime();
@@ -361,6 +423,8 @@ async function prosesSatuPesan(sock, msg) {
           `• *OWNER*     : ${OWNER_NAME}\n` +
           `• *VERSION* : v${dbMemory.version} (209 Fitur)`;
 
+        lastReplyTextByJid.set(jid, menuBody);
+
         await sendNativeInteractiveButtons(
           sock,
           jid,
@@ -375,7 +439,8 @@ async function prosesSatuPesan(sock, msg) {
               {
                 title: '🛠️ PERBAIKAN & AUDIT REAL-TIME 209 FITUR',
                 rows: [
-                  { title: '🛠️ Perbaiki Semua 209 Fitur', description: 'Jalankan auto-repair seluruh 209 fitur sekarang', id: 'autorepair' },
+                  { title: '🛠️ Perbaiki Semua 209 Fitur', description: 'Jalankan auto-repair 209 fitur + reset enkripsi', id: 'autorepair' },
+                  { title: '🔐 Fix Enkripsi (Menunggu Pesan)', description: 'Reset kunci sesi Signal chat ini sekarang', id: 'fixsession' },
                   { title: '🩺 Tes Semua 209 Menu', description: 'Uji validitas 209 fitur secara real-time', id: 'selftest' },
                   { title: '📋 Daftar Lengkap 209 Fitur', description: 'Tampilkan seluruh 209 perintah bot', id: 'allmenu' },
                 ],
@@ -393,7 +458,7 @@ async function prosesSatuPesan(sock, msg) {
             ],
             buttons: [
               { text: '🛠️ Perbaiki 209 Fitur', id: 'autorepair' },
-              { text: '🩺 Tes 209 Menu', id: 'selftest' },
+              { text: '🔐 Fix Enkripsi', id: 'fixsession' },
               { text: '📋 Semua 209 Fitur', id: 'allmenu' },
             ],
           },
@@ -427,7 +492,8 @@ async function prosesSatuPesan(sock, msg) {
 
       // 2. AUTO-REPAIR & REAL-TIME 209 FEATURE SELF-TEST
       if (cmd === 'selftest' || cmd === 'cekfitur' || cmd === 'autorepair') {
-        await sock.sendMessage(jid, { text: '🔄 *Sedang menjalankan Auto-Repair & Tes Validasi 209 Fitur di layar belakang...*' }, { quoted: msg });
+        await sock.sendMessage(jid, { text: '🔄 *Sedang menjalankan Auto-Repair 209 Fitur & Reset Sesi Enkripsi di layar belakang...*' }, { quoted: msg });
+        await repairSignalSessionForJid(jid, 'Auto-Repair Triggered');
         const rep = await jalankanAudit209FiturRealTime(true);
         const details = Object.entries(rep.details).map(([k, v]) => `• *${k}:* ${v}`).join('\n');
         const repairs = serverAutoHeal.repairLogs.slice(0, 5).map((r) => `• ${r}`).join('\n');
@@ -436,7 +502,7 @@ async function prosesSatuPesan(sock, msg) {
           sock,
           jid,
           {
-            title: '🩺 LAPORAN VALIDASI 209 FITUR REAL-TIME',
+            title: '🩺 LAPORAN VALIDASI 209 FITUR + CIPHER GUARD',
             body: `🕒 ${rep.lastChecked}\n📊 *${rep.summary}*\n\n${details}${repairs ? `\n\n🛠️ *Log Perbaikan Otomatis:*\n${repairs}` : ''}`,
             footer: 'Audit otomatis berjalan setiap 5 menit',
             buttons: [
@@ -459,6 +525,7 @@ async function prosesSatuPesan(sock, msg) {
             title: `⚡ SERVER & 209 FITUR STATUS`,
             body:
               `❖ *Valid Features :* ${serverAutoHeal.validCount}/209 VALID\n` +
+              `❖ *Cipher Repairs :* ${serverAutoHeal.totalCipherRepairs}x otomatis\n` +
               `❖ *Background Task :* ${serverAutoHeal.updateProgressText}\n` +
               `❖ *Runtime :* ${getUptime()}\n` +
               `❖ *RAM Usage :* ${hw.ramPercent}% ${hw.ramBar}\n` +
@@ -481,19 +548,12 @@ async function prosesSatuPesan(sock, msg) {
       }
       if (cmd === 'owner') { await sock.sendMessage(jid, { text: `👤 *Owner:* ${OWNER_NAME}` }, { quoted: msg }); return; }
       if (cmd === 'status') {
-        await sock.sendMessage(jid, { text: `📊 *STATUS*\n• Fitur Valid: ${serverAutoHeal.validCount}/209\n• Latar Belakang: ${serverAutoHeal.updateProgressText}\n• Auto-Repair: ${serverAutoHeal.totalAutoRepairs}x` }, { quoted: msg });
+        await sock.sendMessage(jid, { text: `📊 *STATUS*\n• Fitur Valid: ${serverAutoHeal.validCount}/209\n• Cipher Repairs: ${serverAutoHeal.totalCipherRepairs}x\n• Auto-Repair Total: ${serverAutoHeal.totalAutoRepairs}x` }, { quoted: msg });
         return;
       }
       if (cmd === 'update') {
         const log = await jalankanEvolusiMandiri(true);
         await sock.sendMessage(jid, { text: `🧬 *UPDATE SELESAI*\n${log}` }, { quoted: msg });
-        return;
-      }
-      if (cmd === 'githubstalk') {
-        if (!param) { await sock.sendMessage(jid, { text: '⚠️ Contoh: `githubstalk torvalds`' }, { quoted: msg }); return; }
-        const r = await fetchWithTimeout(`https://api.github.com/users/${encodeURIComponent(param)}`).catch(() => null);
-        const u = r ? await r.json() : null;
-        await sock.sendMessage(jid, u?.login ? { image: { url: u.avatar_url }, caption: `🐙 *${u.login}* | Repo: ${u.public_repos} | Followers: ${u.followers}` } : { text: '❌ Tidak ditemukan.' }, { quoted: msg });
         return;
       }
 
@@ -930,36 +990,99 @@ async function prosesSatuPesan(sock, msg) {
     const reply = await panggilServerAISatSet(rawText, `Kamu adalah ${bot.userName}, asisten WhatsApp cerdas.`);
     if (reply) await sock.sendMessage(jid, { text: reply }, { quoted: msg });
   } catch (err) {
-    recordAutoRepair('Handler', err?.message || 'Error', 'Pesan diisolasi');
+    const msg = err?.message || 'Error';
+    if (/Bad MAC|SessionError|No matching sessions|Invalid PreKey/i.test(msg)) {
+      await triggerAutoCipherHeal(msg?.key?.remoteJid || '', msg);
+    } else {
+      recordAutoRepair('Handler', msg, 'Pesan diisolasi');
+    }
   }
 }
+
+let backgroundLoopsStarted = false;
 
 async function start() {
   await loadMemory();
   await jalankanEvolusiMandiri(false);
 
-  // SIKLUS REAL-TIME 5 MENIT: Audit & Perbaiki Seluruh 209 Fitur Otomatis
-  setTimeout(() => jalankanAudit209FiturRealTime(false), 8000);
-  setInterval(() => jalankanAudit209FiturRealTime(false), 5 * 60 * 1000);
+  // Pulihkan sesi WhatsApp otomatis kalau folder ./auth terhapus saat redeploy GitHub
+  await restoreAuthFromGitHub(AUTH_DIR);
+
+  if (!backgroundLoopsStarted) {
+    backgroundLoopsStarted = true;
+    // SIKLUS REAL-TIME 5 MENIT: Audit & Perbaiki Seluruh 209 Fitur + Signal Cipher Guard
+    setTimeout(() => jalankanAudit209FiturRealTime(false), 8000);
+    setInterval(() => jalankanAudit209FiturRealTime(false), 5 * 60 * 1000);
+
+    // Live Hot-Reload & Graceful Shutdown agar edit GitHub tidak memutus perangkat
+    setupGracefulShutdown(bot, saveMemory);
+    startGitHubLiveHotReload(async (commitId) => {
+      serverAutoHeal.updateProgressText = `✅ Live Update GitHub (${commitId}) berhasil tanpa putus WA`;
+      await jalankanAudit209FiturRealTime(true);
+    });
+  }
 
   const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
   const { version } = await fetchLatestBaileysVersion();
 
-  console.log(`\n🤖 ${bot.userName} v${dbMemory.version} — ${ALL_COMMANDS_SET.size}/209 FITUR VALID AKTIF\n`);
+  console.log(`\n🤖 ${bot.userName} v${dbMemory.version} — ${ALL_COMMANDS_SET.size}/209 FITUR VALID + CIPHER GUARD\n`);
 
   const sock = makeWASocket({
     version,
     auth: state,
     logger: pino({ level: 'silent' }),
-    browser: ['WHUXEN Bot', 'Chrome', '9.0.0'],
+    browser: ['WHUXEN Bot', 'Chrome', '9.2.0'],
     printQRInTerminal: false,
+    getMessage: async (key) => sentMessageCache.get(key.id) || { conversation: '' },
   });
+
+  // Simpan otomatis semua pesan keluar ke cache untuk anti-"Menunggu pesan ini"
+  const origSendMessage = sock.sendMessage.bind(sock);
+  sock.sendMessage = async (jid, content, options) => {
+    const sent = await origSendMessage(jid, content, options);
+    if (sent?.key?.id && sent?.message) {
+      rememberOutgoingMessage(sent.key.id, sent.message);
+      if (content?.text) lastReplyTextByJid.set(jid, content.text);
+    }
+    return sent;
+  };
 
   bot.sock = sock;
   bot.connected = false;
   bot.registered = !!sock.authState.creds.registered;
 
-  sock.ev.on('creds.update', saveCreds);
+  // Simpan kredensial lokal + sinkronkan otomatis ke GitHub
+  sock.ev.on('creds.update', async () => {
+    await saveCreds();
+    scheduleAuthBackupToGitHub(AUTH_DIR);
+  });
+
+  // Detektor otomatis "Menunggu pesan ini" (Retry Receipt / Cipher Desync)
+  sock.ev.on('messages.update', async (updates) => {
+    for (const u of updates) {
+      const targetJid = u.key?.remoteJid;
+      if (!targetJid || !u.key?.fromMe) continue;
+
+      const hasRetryOrDecryptError =
+        Boolean(u.update?.messageStubType) ||
+        (typeof u.update?.status === 'number' && u.update.status === 0);
+
+      if (hasRetryOrDecryptError) {
+        const lastAttempt = retryCooldownByJid.get(targetJid) || 0;
+        if (Date.now() - lastAttempt < 8000) continue;
+        retryCooldownByJid.set(targetJid, Date.now());
+
+        await repairSignalSessionForJid(targetJid, 'Terdeteksi Menunggu Pesan Ini (Retry Receipt)');
+        const fallbackText = lastReplyTextByJid.get(targetJid);
+        if (fallbackText) {
+          await origSendMessage(targetJid, {
+            text: `🔄 *Auto-Repair Enkripsi Berhasil:*\n\n${fallbackText}`,
+          }).catch(() => {});
+        }
+      }
+    }
+  });
+
   sock.ev.on('messages.upsert', ({ messages, type }) => {
     if (type !== 'notify') return;
     for (const msg of messages) {
@@ -980,7 +1103,8 @@ async function start() {
       bot.qr = null;
       bot.pairingCode = null;
       bot.userPhone = sock.user?.id ? sock.user.id.split(':')[0] : PHONE;
-      console.log(`✅ [TERHUBUNG] ${bot.userPhone} — Siklus Real-Time 5-Menit Aktif`);
+      scheduleAuthBackupToGitHub(AUTH_DIR);
+      console.log(`✅ [TERHUBUNG] ${bot.userPhone} — 209 Fitur, Cipher Guard & GitHub Sync Aktif`);
     } else if (connection === 'close') {
       bot.connected = false;
       const code = lastDisconnect?.error?.output?.statusCode;
