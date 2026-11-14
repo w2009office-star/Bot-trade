@@ -11,21 +11,26 @@ import pino from 'pino';
 
 import {
   initFeatures,
-  getLivePublicUrl,
   MENU_CATEGORIES,
   ALL_COMMANDS_SET,
   formatCategoryBox,
   getUptime,
   getTodayDateString,
+  getIndonesianFullDateTime,
   extractUrl,
   getServerHardwareStats,
   fetchWithTimeout,
   fetchBuffer,
+  mediaBufferToWebpSticker,
+  createBratSticker,
+  urlOrTextToWebpSticker,
+  extractAndDownloadViewOnce,
   convertLinkToHdShortVideo,
   sendInteractiveButtons,
   deteksiVirtekDanBug,
   kirimTampilanKuroSlash,
   kirimTampilanSonic,
+  generateSpotifyPlayerCardBuffer,
   downloadTikTok,
   searchYouTube,
   downloadYouTube,
@@ -47,16 +52,10 @@ const PHONE = (process.env.PHONE_NUMBER || '').replace(/\D/g, '');
 const AUTH_DIR = process.env.AUTH_DIR || './auth';
 const MEMORY_FILE = './memory.json';
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY || '';
-const OWNER_NAME = process.env.OWNER_NAME || 'Owner Bot';
+const OWNER_NAME = process.env.OWNER_NAME || 'Maverick';
+const BOT_CODE_TAG = process.env.BOT_CODE_TAG || 'WhuxenXDev';
 const CHANNEL_URL = process.env.CHANNEL_URL || 'https://whatsapp.com/channel/0029Va8';
 const MENU_BANNER_LINK = process.env.MENU_BANNER_LINK || '';
-const PUBLIC_URL = (
-  process.env.RAILWAY_PUBLIC_DOMAIN
-    ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}`
-    : process.env.RAILWAY_STATIC_URL
-    ? `https://${process.env.RAILWAY_STATIC_URL.replace(/^https?:\/\//, '')}`
-    : process.env.RENDER_EXTERNAL_URL || process.env.PUBLIC_URL || ''
-).replace(/\/$/, '');
 
 const bot = {
   sock: null,
@@ -66,7 +65,7 @@ const bot = {
   pairingCode: null,
   startTime: Date.now(),
   userPhone: null,
-  userName: 'WHUXEN BOT',
+  userName: 'WHUXEN ASISTEN',
 
   stats: {
     totalDeletedBadWords: 0,
@@ -90,7 +89,7 @@ const bot = {
 // 2. SISTEM MEMORI PERMANEN, HIGH SCORE GAME & SELF-TEST
 // ============================================================
 let dbMemory = {
-  version: 6.5,
+  version: 7.0,
   lastUpdateDate: '',
   updateLogs: [],
   users: {},
@@ -163,7 +162,7 @@ async function jalankanEvolusiMandiri(paksaManual = false) {
     if (!dbMemory.learnedWords.includes(k)) dbMemory.learnedWords.push(k);
   });
 
-  const pesanLog = `v${dbMemory.version} (${hariIni}): HD Moving Video Menu, Rich Interactive UI Dropdown, & Auto-HTTPS Layar Tap.`;
+  const pesanLog = `v${dbMemory.version} (${hariIni}): Forwarded Profile Menu, In-Chat Layar Tap, Brat & BratVid Sticker, & RVO.`;
   dbMemory.updateLogs.unshift(pesanLog);
   if (dbMemory.updateLogs.length > 10) dbMemory.updateLogs.pop();
 
@@ -178,10 +177,9 @@ async function jalankanBackgroundSelfTest() {
     { name: 'AI Engine (Multi-API)', fn: async () => Boolean(await panggilServerAISatSet('Balas 1 kata: OK', 'Jawab singkat.')) },
     { name: 'TikTok HD Downloader', fn: async () => (await fetchWithTimeout('https://www.tikwm.com/api/', { method: 'POST' }, 8000)).ok },
     { name: 'Spotify & YT Music', fn: async () => (await searchYouTube('lofi hip hop')).length > 0 },
+    { name: 'Brat & WebP Sticker', fn: async () => Boolean(await createBratSticker('test', false)) },
     { name: 'Cuaca Indonesia', fn: async () => Boolean((await getCuacaIndonesia('Bekasi'))?.caption) },
     { name: 'Jadwal Sholat Kemenag', fn: async () => Boolean(await getJadwalSholatIndonesia('Jakarta')) },
-    { name: 'Al-Quran & Murattal', fn: async () => Boolean((await getSurahLengkap('1'))?.text) },
-    { name: 'HD Video & Layar Tap', fn: async () => true },
   ];
 
   let pass = 0;
@@ -214,7 +212,6 @@ initFeatures({
   GEMINI_API_KEY,
   OWNER_NAME,
   CHANNEL_URL,
-  PUBLIC_URL,
 });
 
 function getGroupConfig(jid) {
@@ -276,9 +273,9 @@ function unwrapMessageContent(rawMsg) {
 
 function mapButtonDisplayTextToCommand(text) {
   const clean = text.replace(/^[^\w\d]+/u, '').trim().toLowerCase();
-  if (clean.startsWith('buka menu')) return 'allmenu';
-  if (clean.startsWith('game kuro slash')) return 'kuroslash';
-  if (clean.startsWith('game speedy dash')) return 'sonic';
+  if (clean.startsWith('buka menu') || clean.startsWith('semua perintah')) return 'allmenu';
+  if (clean.startsWith('kuro slash')) return 'kuroslash';
+  if (clean.startsWith('speedy dash')) return 'sonic';
   if (clean.startsWith('cek speed')) return 'ping';
   if (clean.startsWith('unduh video mp4')) return 'ytmp4';
   if (clean.startsWith('menu ')) return 'menu';
@@ -299,7 +296,6 @@ function mapButtonDisplayTextToCommand(text) {
 function extractIncomingTextAndButton(msg) {
   const m = unwrapMessageContent(msg.message);
 
-  // 1. Baca ID resmi dari Native Flow Button (quick_reply & single_select)
   const nativeResponse = m.interactiveResponseMessage?.nativeFlowResponseMessage;
   if (nativeResponse?.paramsJson) {
     try {
@@ -311,7 +307,6 @@ function extractIncomingTextAndButton(msg) {
     } catch {}
   }
 
-  // 2. Baca ID tombol standar / template / list
   if (m.buttonsResponseMessage?.selectedButtonId) {
     return String(m.buttonsResponseMessage.selectedButtonId).trim();
   }
@@ -322,7 +317,6 @@ function extractIncomingTextAndButton(msg) {
     return String(m.listResponseMessage.singleSelectReply.selectedRowId).trim();
   }
 
-  // 3. Baca teks biasa atau display text dari tombol yang diklik
   const raw = (
     m.conversation ||
     m.extendedTextMessage?.text ||
@@ -339,7 +333,7 @@ function extractIncomingTextAndButton(msg) {
 }
 
 // ============================================================
-// 4. HANDLER UTAMA PESAN, GAME, KEAMANAN & PERINTAH
+// 4. HANDLER UTAMA PESAN, GAME, STICKER, RVO & PERINTAH
 // ============================================================
 const gameSessions = new Map();
 const userCooldowns = new Map();
@@ -376,21 +370,23 @@ function pasangPenjawab(sock) {
         const isGroup = jid.endsWith('@g.us');
         const senderParticipant = msg.key.participant || jid;
         const senderNum = senderParticipant.split(':')[0].replace(/\D/g, '');
-        const pushName = msg.pushName || 'Teman';
+        const pushName = msg.pushName || 'Member';
+        const isOwner = Boolean(PHONE && senderNum === PHONE);
 
-        if (dbMemory.botSettings.mode === 'self' && PHONE && senderNum !== PHONE) {
+        if (dbMemory.botSettings.mode === 'self' && !isOwner) {
           continue;
         }
 
+        const unwrapped = unwrapMessageContent(msg.message);
         const rawText = extractIncomingTextAndButton(msg);
         const textLower = rawText.toLowerCase();
 
         // ----------------------------------------------------
-        // 🛡️ 1. PROTEKSI KEAMANAN GRUP LENGKAP (VIRTEK, BUG, LINK, TOXIC, FLOOD)
+        // 🛡️ 1. PROTEKSI KEAMANAN GRUP LENGKAP
         // ----------------------------------------------------
         if (isGroup) {
           const gCfg = getGroupConfig(jid);
-          let isSenderAdmin = Boolean(PHONE && senderNum === PHONE);
+          let isSenderAdmin = isOwner;
 
           try {
             const meta = await sock.groupMetadata(jid);
@@ -506,7 +502,7 @@ function pasangPenjawab(sock) {
         }
 
         // ----------------------------------------------------
-        // 🎮 3. KONTROL AKSI & TOMBOL GAME AKTIF
+        // 🎮 3. KONTROL SENTUH LANGSUNG GAME DI DALAM CHAT
         // ----------------------------------------------------
         const cleanAction = textLower.replace(/^[.!/#]/, '').trim();
 
@@ -520,6 +516,7 @@ function pasangPenjawab(sock) {
           const session = gameSessions.get(jid);
 
           if (session.type === 'kuroslash' && ['kiri', 'tebas', 'kanan', 'ulti'].includes(cleanAction)) {
+            session.wave = (session.wave || 0) + 1;
             let eventMsg = '';
             if (cleanAction === 'kiri') {
               session.lane = Math.max(0, session.lane - 1);
@@ -532,12 +529,12 @@ function pasangPenjawab(sock) {
               session.ulti = Math.min(100, session.ulti + 12);
               eventMsg = 'Bergerak cepat ke jalur KANAN & mengambil Orb Emas (+65)!';
             } else if (cleanAction === 'tebas') {
-              if (Math.random() < 0.75) {
+              if (Math.random() < 0.78) {
                 const pts = Math.floor(Math.random() * 140) + 120;
                 session.score += pts;
-                session.ulti = Math.min(100, session.ulti + 22);
+                session.ulti = Math.min(100, session.ulti + 25);
                 session.speed = Math.min(12.0, session.speed + 0.3);
-                eventMsg = `⚔️ TEBASAN TELAK! Musuh & peluru merah ter-PARRY (+${pts} skor)!`;
+                eventMsg = `⚔️ TEBASAN TELAK! Oni & peluru merah ter-PARRY (+${pts} skor)!`;
               } else {
                 session.hp = Math.max(0, session.hp - 18);
                 eventMsg = '💥 Terkena ledakan BOM saat menebas! HP berkurang -18.';
@@ -549,7 +546,7 @@ function pasangPenjawab(sock) {
                 session.hp = Math.min(100, session.hp + 20);
                 eventMsg = '🌊 GELOMBANG ULTI TERLEPAS! Semua Oni & Boss hancur (+450 skor, +20 HP)!';
               } else {
-                eventMsg = `⚠️ Energi ULTI baru ${session.ulti}% (butuh 100%). Gunakan TEBAS untuk mengisi!`;
+                eventMsg = `⚠️ Energi ULTI baru ${session.ulti}% (butuh 100%). Sentuh ⚔️ TEBAS untuk mengisi!`;
               }
             }
 
@@ -641,90 +638,61 @@ function pasangPenjawab(sock) {
             await sock.sendPresenceUpdate('composing', jid);
           }
 
-          // === MAIN & MENU (VIDEO BERGERAK HD + RICH INTERACTIVE UI) ===
+          // === MAIN & MENU (UNGGAHAN FORWARDED PROFILE + INFORMATION TABLE SEPERTI DI FOTO) ===
           if (cmd === 'menu' || cmd === 'help') {
+            const dt = getIndonesianFullDateTime();
+            const userStatusLabel = isOwner ? '👑 Owner' : '⭐ Unlimited Member';
             const bannerSource =
               MENU_BANNER_LINK ||
-              `https://dummyimage.com/1280x720/090d16/38bdf8.png&text=${encodeURIComponent(bot.userName + ' • v' + dbMemory.version)}`;
-            const hdMedia = await convertLinkToHdShortVideo(bannerSource, bot.userName, !MENU_BANNER_LINK);
+              `https://dummyimage.com/1000x480/1e1035/c084fc.png&text=${encodeURIComponent(bot.userName + '  •  v' + dbMemory.version)}`;
 
-            const videoHeaderCaption =
-              `*╭┈───〔 ${bot.userName} 〕┈───⊷*\n` +
-              `*├✦ Owner:* ${OWNER_NAME}\n` +
-              `*├✦ Commands:* ${ALL_COMMANDS_SET.size} Fitur\n` +
-              `*├✦ Runtime:* ${getUptime()}\n` +
-              `*├✦ Mode:* ${dbMemory.botSettings.mode.toUpperCase()}\n` +
-              `*├✦ Status API:* ${dbMemory.healthReport.summary}\n` +
-              `*╰───────────────────⊷*\n\n` +
-              `Halo *@${senderParticipant.split('@')[0]}* 👋`;
-
-            // 1. Kirim Video Pendek Animasi HD (berputar otomatis di chat)
-            if (hdMedia?.type === 'video' && hdMedia.buffer) {
-              await sock.sendMessage(
-                jid,
-                {
-                  video: hdMedia.buffer,
-                  gifPlayback: true,
-                  mimetype: 'video/mp4',
-                  caption: videoHeaderCaption,
-                  mentions: [senderParticipant],
-                },
-                { quoted: msg }
-              );
-            } else if (hdMedia?.buffer) {
-              await sock.sendMessage(
-                jid,
-                {
-                  image: hdMedia.buffer,
-                  caption: videoHeaderCaption,
-                  mentions: [senderParticipant],
-                },
-                { quoted: msg }
-              );
-            }
-
-            // 2. Kirim Rich Interactive UI Card yang rapi dengan Dropdown Kategori & Layar Tap
-            const publicBase = getLivePublicUrl();
-            const kuroTapUrl = publicBase ? `${publicBase}/arcade/kuroslash?user=${senderNum}` : '';
+            const menuCardBody =
+              `└ *${bot.userName}* ┐\n` +
+              `🗓️ ${dt.full}\n\n` +
+              `🏷️ *Ohayou! 🌅*\n` +
+              `Berakhir besok pukul ${dt.jam}\n` +
+              `Kode: \`${BOT_CODE_TAG}\`\n\n` +
+              `👤 *INFORMATION*\n` +
+              `• *NAMA*       : ${pushName}\n` +
+              `• *STATUS*    : ${userStatusLabel}\n` +
+              `• *LIMIT*        : ∞ Unlimited\n` +
+              `• *BOT*          : ${bot.userName}\n` +
+              `• *OWNER*     : ${OWNER_NAME}\n` +
+              `• *VERSION* : v${dbMemory.version}`;
 
             const menuSections = [
               {
-                title: '📌 DAFTAR MENU & LAYAR TAP',
+                title: '📂 KATEGORI MENU & LAYAR TAP',
                 rows: [
-                  { title: '📋 Semua Perintah (All Menu)', description: 'Tampilkan seluruh daftar perintah lengkap', id: 'allmenu' },
-                  { title: '⚔️ Layar Tap: Kuro Slash', description: 'Main game tebas Oni dengan kontrol sentuh', id: 'kuroslash' },
-                  { title: '🌀 Layar Tap: Speedy Dash', description: 'Main game Sonic kumpulkan Gold Rings', id: 'sonic' },
+                  { title: '📋 Semua Perintah (All Menu)', description: `Tampilkan seluruh ${ALL_COMMANDS_SET.size} perintah bot`, id: 'allmenu' },
+                  { title: '⚔️ Kuro Slash (Layar Tap Chat)', description: 'Main game tebas Oni langsung di layar chat', id: 'kuroslash' },
+                  { title: '🌀 Speedy Dash (Layar Tap Chat)', description: 'Main game Sonic kumpulkan Gold Rings di chat', id: 'sonic' },
+                  { title: '🎨 Sticker, Brat & BratVid', description: 'Buat stiker foto/video/teks & stiker brat viral', id: 'logomenu' },
+                  { title: '🎧 Spotify & YT Music Player', description: 'Putar lagu dengan kartu Spotify & download MP3', id: 'downloadmenu' },
                   { title: '🤖 Menu AI & ChatGPT/Gemini', description: 'Asisten pintar, koding, matematika & memori', id: 'aimenu' },
-                  { title: '📥 Menu Downloader & Spotify', description: 'TikTok HD, YouTube MP3/MP4, Spotify Player', id: 'downloadmenu' },
                   { title: '🔍 Menu Search & Islami', description: 'Cuaca BMKG, Jadwal Sholat, Al-Quran, Wiki', id: 'searchmenu' },
                   { title: '🛡️ Menu Keamanan Grup', description: 'Anti-Virtek, Anti-Bug, Anti-Link & Admin', id: 'groupmenu' },
-                  { title: '🎬 Menu Animasi HD & Logo', description: 'Ubah link jadi video animasi HD & font', id: 'logomenu' },
-                  { title: '🛠️ Menu Tools & Utilitas', description: 'QR Code, Stiker, Kalkulator, Terjemahan', id: 'toolsmenu' },
+                  { title: '👁️ Menu Tools & RVO (View Once)', description: 'Buka foto/video sekali lihat (rvo), QR, dll', id: 'toolsmenu' },
                 ],
               },
             ];
-
-            const quickBtns = [
-              { text: '⚔️ Game Kuro Slash', id: 'kuroslash' },
-              { text: '🌀 Game Speedy Dash', id: 'sonic' },
-              { text: '⚡ Cek Speed / Ping', id: 'ping' },
-            ];
-            if (kuroTapUrl) {
-              quickBtns.unshift({ text: '📱 Layar Tap Fullscreen', url: kuroTapUrl });
-            } else if (CHANNEL_URL.startsWith('https://')) {
-              quickBtns.push({ text: `↗️ Saluran ${bot.userName}`, url: CHANNEL_URL });
-            }
 
             await sendInteractiveButtons(
               sock,
               jid,
               {
-                title: `🎛️ PANEL KONTROL ${bot.userName}`,
-                body: `Pilih kategori fitur lewat daftar di bawah atau sentuh tombol game Layar Tap langsung:`,
-                footer: `© ${bot.userName}`,
+                title: `HOME  •  ABOUT  •  PROFILE`,
+                body: menuCardBody,
+                footer: `© ${bot.userName} • Ketik .allmenu untuk daftar teks lengkap`,
+                imageUrl: bannerSource,
+                forwardedCard: true,
                 sections: menuSections,
-                listTitle: '📂 Buka Daftar Menu',
-                buttons: quickBtns,
+                listTitle: '📂 Pilih Menu / Layar Tap',
+                buttons: [
+                  { text: '📋 Semua Perintah', id: 'allmenu' },
+                  { text: '⚔️ Kuro Slash', id: 'kuroslash' },
+                  { text: '🌀 Speedy Dash', id: 'sonic' },
+                ],
               },
               msg
             );
@@ -737,7 +705,7 @@ function pasangPenjawab(sock) {
               `*├✦ Owner:* ${OWNER_NAME}\n` +
               `*├✦ Commands:* ${ALL_COMMANDS_SET.size}\n` +
               `*├✦ Runtime:* ${getUptime()}\n` +
-              `*├✦ Version:* ${dbMemory.version}\n` +
+              `*├✦ Version:* v${dbMemory.version}\n` +
               `*╰───────────────────⊷*\n\n`;
 
             for (const [catName, listCmd] of Object.entries(MENU_CATEGORIES)) {
@@ -745,14 +713,21 @@ function pasangPenjawab(sock) {
             }
             fullMenu += `\n> *© ᴘᴏᴡᴇʀᴇᴅ ʙʏ ${bot.userName}*`;
 
-            await sock.sendMessage(jid, { text: fullMenu }, { quoted: msg });
+            await sock.sendMessage(
+              jid,
+              {
+                text: fullMenu,
+                contextInfo: { forwardingScore: 999, isForwarded: true },
+              },
+              { quoted: msg }
+            );
             continue;
           }
 
           const subMenuMap = {
             aimenu: 'AI', downloadmenu: 'DOWNLOAD', searchmenu: 'SEARCH',
             animemenu: 'ANIME', funmenu: 'FUN', groupmenu: 'GROUP',
-            logomenu: 'LOGO', toolsmenu: 'TOOLS', ownermenu: 'OWNER',
+            logomenu: 'STICKER_LOGO', toolsmenu: 'TOOLS', ownermenu: 'OWNER',
           };
           if (subMenuMap[cmd]) {
             const catKey = subMenuMap[cmd];
@@ -779,8 +754,6 @@ function pasangPenjawab(sock) {
               `❖ *Time :* ${wibTime} WIB\n` +
               `❖ *Owner :* ${OWNER_NAME}`;
 
-            const ownerWaUrl = PHONE ? `https://wa.me/${PHONE}` : CHANNEL_URL;
-
             await sendInteractiveButtons(
               sock,
               jid,
@@ -788,23 +761,14 @@ function pasangPenjawab(sock) {
                 title: `⚡ SERVER STATUS — ${bot.userName}`,
                 body: pingReport,
                 footer: `SEMUA FITUR ➔ ${bot.userName}`,
+                forwardedCard: true,
                 buttons: [
                   { text: `📋 Buka Menu ${bot.userName}`, id: 'allmenu' },
-                  { text: `↗️ Saluran ${bot.userName}`, url: CHANNEL_URL },
-                  { text: '↗️ Kontak Owner', url: ownerWaUrl },
+                  { text: '⚔️ Kuro Slash', id: 'kuroslash' },
                 ],
               },
               msg
             );
-
-            try {
-              const salamText = `Konnichiwa, watashi ${bot.userName}, salam kenal ${pushName}! Etto, cobain yuk fiturnya di bawah, jangan sungkan ya.`;
-              const ttsUrl = `https://translate.google.com/translate_tts?ie=UTF-8&q=${encodeURIComponent(salamText)}&tl=id&client=tw-ob`;
-              const vnBuf = await fetchBuffer(ttsUrl).catch(() => null);
-              if (vnBuf) {
-                await sock.sendMessage(jid, { audio: vnBuf, mimetype: 'audio/mp4', ptt: true }, { quoted: msg });
-              }
-            } catch {}
             continue;
           }
 
@@ -870,7 +834,7 @@ function pasangPenjawab(sock) {
             continue;
           }
 
-          // === DOWNLOAD & SPOTIFY PLAYER ===
+          // === DOWNLOAD & SPOTIFY PLAYER UI (SEPERTI DI FOTO .play2) ===
           if (['tiktok', 'tt', 'ttmp3', 'ttslide'].includes(cmd)) {
             const linkTT = extractUrl(param);
             if (!linkTT || !/tiktok\.com/i.test(linkTT)) { await sock.sendMessage(jid, { text: `⚠️ Contoh: \`${cmd} https://vt.tiktok.com/xxxx\`` }, { quoted: msg }); continue; }
@@ -911,49 +875,40 @@ function pasangPenjawab(sock) {
             continue;
           }
 
-          if (cmd === 'play' || cmd === 'song' || cmd === 'spotify') {
-            if (!param) { await sock.sendMessage(jid, { text: `⚠️ Contoh: \`${cmd} Cigarettes After Sex K.\`` }, { quoted: msg }); continue; }
+          if (['play', 'play2', 'song', 'spotify'].includes(cmd)) {
+            if (!param) { await sock.sendMessage(jid, { text: `⚠️ Contoh: \`${cmd} iqro raim laode\`` }, { quoted: msg }); continue; }
             const results = await searchYouTube(param);
             const first = results[0];
             if (!first) { await sock.sendMessage(jid, { text: '❌ Lagu tidak ditemukan.' }, { quoted: msg }); continue; }
 
             lastPlaySession.set(jid, first);
-            const publicBase = getLivePublicUrl();
-            const spotifyScreenUrl = publicBase
-              ? `${publicBase}/player?q=${encodeURIComponent(first.title)}&artist=${encodeURIComponent(first.author)}&vid=${encodeURIComponent(first.videoId || '')}&dur=${encodeURIComponent(first.duration)}`
-              : '';
-
-            const playerCardText =
-              `🎧 *SPOTIFY & YT MUSIC AUDIO*\n` +
-              `────────────────────\n` +
-              `🎵 *${first.title}*\n` +
-              `👤 ${first.author}   💚\n\n` +
-              `⚪──────────────────\n` +
-              `0:01                        ${first.duration}\n\n` +
-              `   💬      ⏮️      ⏸️      ⏭️      🔁\n` +
-              `────────────────────\n` +
-              `_⏳ Mengirimkan file audio lagu..._`;
-
-            const playBtns = [
-              { text: '🎬 Unduh Video MP4', id: 'ytmp4' },
-              { text: `📋 Menu ${bot.userName}`, id: 'menu' },
-            ];
-            if (spotifyScreenUrl) {
-              playBtns.unshift({ text: '📱 Buka Layar Spotify', url: spotifyScreenUrl });
-            }
-
-            await sendInteractiveButtons(
-              sock,
-              jid,
-              {
-                title: 'YT MUSIC & SPOTIFY PLAYER',
-                body: playerCardText,
-                footer: `support terus ${bot.userName} yaaa`,
-                imageUrl: first.thumbnail,
-                buttons: playBtns,
-              },
-              msg
+            const spotifyCardBuf = await generateSpotifyPlayerCardBuffer(
+              first.title,
+              first.author,
+              first.thumbnail,
+              first.duration
             );
+
+            const playerCaption =
+              `🎧 *PLAYING FROM SEARCH*\n` +
+              `*${first.title}*\n` +
+              `${first.author}   🤍\n\n` +
+              `⚪──────────────────\n` +
+              `0:00                        ${first.duration}\n` +
+              `   🔀      ⏮      ⏸      ⏭      🔁\n` +
+              `_support terus kami yaaa_`;
+
+            if (spotifyCardBuf) {
+              await sock.sendMessage(
+                jid,
+                {
+                  image: spotifyCardBuf,
+                  caption: playerCaption,
+                  contextInfo: { forwardingScore: 999, isForwarded: true },
+                },
+                { quoted: msg }
+              );
+            }
 
             const audioData = await downloadYouTube(first.url, true);
             if (audioData?.url) {
@@ -1081,12 +1036,12 @@ function pasangPenjawab(sock) {
             continue;
           }
 
-          // === FUN & ARCADE TAP GAMES ===
+          // === FUN & LAYAR TAP LANGSUNG DI CHAT ===
           if (cmd === 'kuroslash' || cmd === 'slash') {
             const best = dbMemory.gameHighScores.kuroslash[senderNum] || 0;
-            const state = { type: 'kuroslash', lane: 1, hp: 100, score: 0, best, ulti: 30, speed: 5.5 };
+            const state = { type: 'kuroslash', lane: 1, hp: 100, score: 0, best, ulti: 31, speed: 5.5, wave: 0 };
             gameSessions.set(jid, state);
-            await kirimTampilanKuroSlash(sock, jid, senderNum, state, 'Arena Kuro Slash dimulai! Sentuh tombol atau Layar Tap Fullscreen.', msg);
+            await kirimTampilanKuroSlash(sock, jid, senderNum, state, 'Arena Kuro Slash dimulai! Sentuh tombol di bawah langsung.', msg);
             continue;
           }
 
@@ -1094,7 +1049,7 @@ function pasangPenjawab(sock) {
             const best = dbMemory.gameHighScores.sonic[senderNum] || 0;
             const state = { type: 'sonic', rings: 10, score: 0, best, speed: 6.2, laserAlert: false };
             gameSessions.set(jid, state);
-            await kirimTampilanSonic(sock, jid, senderNum, state, 'Emerald Coast Run dimulai! Sentuh tombol atau Layar Tap Fullscreen.', msg);
+            await kirimTampilanSonic(sock, jid, senderNum, state, 'Emerald Coast Run dimulai! Sentuh BOOST atau JUMP di bawah.', msg);
             continue;
           }
 
@@ -1162,7 +1117,7 @@ function pasangPenjawab(sock) {
             const participants = metadata.participants.map((p) => p.id);
             const gCfg = getGroupConfig(jid);
             const senderInfo = metadata.participants.find((p) => p.id === senderParticipant || p.id.split(':')[0].replace(/\D/g, '') === senderNum);
-            const isSenderAdmin = senderInfo?.admin === 'admin' || senderInfo?.admin === 'superadmin' || (PHONE && senderNum === PHONE);
+            const isSenderAdmin = senderInfo?.admin === 'admin' || senderInfo?.admin === 'superadmin' || isOwner;
 
             if (cmd === 'ginfo' || cmd === 'groupsettings' || cmd === 'gsettings') {
               const statusGrupText =
@@ -1180,7 +1135,7 @@ function pasangPenjawab(sock) {
                 {
                   title: '🛡️ PENGATURAN KEAMANAN GRUP',
                   body: statusGrupText,
-                  footer: 'Klik tombol di bawah untuk mengubah pengaturan (Admin)',
+                  footer: 'Sentuh tombol di bawah untuk mengubah pengaturan (Admin)',
                   buttons: [
                     { text: `🔗 Anti-Link (${gCfg.antilink ? 'ON' : 'OFF'})`, id: 'antilink' },
                     { text: `☣️ Anti-Virtek/Bug (${gCfg.antivirtek ? 'ON' : 'OFF'})`, id: 'antivirtek' },
@@ -1221,11 +1176,11 @@ function pasangPenjawab(sock) {
               const parts = param.split('|').map((s) => s.trim()).filter(Boolean);
               if (parts.length >= 3) await sock.sendMessage(jid, { poll: { name: parts[0], values: parts.slice(1), selectableCount: 1 } });
             } else if (cmd === 'delete') {
-              const qInfo = msg.message.extendedTextMessage?.contextInfo;
+              const qInfo = unwrapped.extendedTextMessage?.contextInfo;
               if (qInfo?.stanzaId) await sock.sendMessage(jid, { delete: { remoteJid: jid, fromMe: false, id: qInfo.stanzaId, participant: qInfo.participant } });
             } else if (['kick', 'add', 'promote', 'demote'].includes(cmd)) {
-              const qPart = msg.message.extendedTextMessage?.contextInfo?.participant;
-              const ment = msg.message.extendedTextMessage?.contextInfo?.mentionedJid?.[0];
+              const qPart = unwrapped.extendedTextMessage?.contextInfo?.participant;
+              const ment = unwrapped.extendedTextMessage?.contextInfo?.mentionedJid?.[0];
               const target = ment || qPart || (param ? `${param.replace(/\D/g, '')}@s.whatsapp.net` : null);
               if (target) {
                 const act = { kick: 'remove', add: 'add', promote: 'promote', demote: 'demote' }[cmd];
@@ -1259,12 +1214,84 @@ function pasangPenjawab(sock) {
             continue;
           }
 
-          // === LOGO, FONT & KONVERTER LINK KE VIDEO PENDEK ANIMASI HD ===
+          // === STICKER MAKER (FOTO, VIDEO, TEKS, BRAT, BRATVID) & LOGO ===
+          if (['sticker', 'stiker', 's'].includes(cmd)) {
+            const qMsg = unwrapMessageContent(unwrapped.extendedTextMessage?.contextInfo?.quotedMessage);
+            const imgMsg = unwrapped.imageMessage || qMsg?.imageMessage;
+            const vidMsg = unwrapped.videoMessage || qMsg?.videoMessage;
+
+            if (imgMsg) {
+              const stream = await downloadContentFromMessage(imgMsg, 'image');
+              let buf = Buffer.from([]);
+              for await (const chunk of stream) buf = Buffer.concat([buf, chunk]);
+              const webpBuf = await mediaBufferToWebpSticker(buf, false);
+              if (webpBuf) {
+                await sock.sendMessage(jid, { sticker: webpBuf }, { quoted: msg });
+              } else {
+                await sock.sendMessage(jid, { text: '❌ Gagal mengonversi foto ke stiker (pastikan ffmpeg terpasang di server).' }, { quoted: msg });
+              }
+              continue;
+            }
+
+            if (vidMsg) {
+              const stream = await downloadContentFromMessage(vidMsg, 'video');
+              let buf = Buffer.from([]);
+              for await (const chunk of stream) buf = Buffer.concat([buf, chunk]);
+              const webpBuf = await mediaBufferToWebpSticker(buf, true);
+              if (webpBuf) {
+                await sock.sendMessage(jid, { sticker: webpBuf }, { quoted: msg });
+              } else {
+                await sock.sendMessage(jid, { text: '❌ Gagal mengonversi video ke stiker bergerak.' }, { quoted: msg });
+              }
+              continue;
+            }
+
+            if (param) {
+              const webpBuf = await urlOrTextToWebpSticker(param);
+              if (webpBuf) {
+                await sock.sendMessage(jid, { sticker: webpBuf }, { quoted: msg });
+              } else {
+                await sock.sendMessage(jid, { text: '❌ Gagal membuat stiker teks.' }, { quoted: msg });
+              }
+              continue;
+            }
+
+            await sock.sendMessage(jid, { text: '⚠️ Kirim atau balas **foto / video pendek** dengan caption `.sticker`, atau ketik `.sticker <teks>`' }, { quoted: msg });
+            continue;
+          }
+
+          if (['brat', 'bratvid', 'bratvideo'].includes(cmd)) {
+            const qText =
+              unwrapped.extendedTextMessage?.contextInfo?.quotedMessage?.conversation ||
+              unwrapped.extendedTextMessage?.contextInfo?.quotedMessage?.extendedTextMessage?.text ||
+              '';
+            const bratText = param || qText;
+            if (!bratText) {
+              await sock.sendMessage(jid, { text: `⚠️ Contoh:\n• \`.brat ${pushName.toLowerCase()} lagi santai\`\n• \`.bratvid teks bergerak viral\`` }, { quoted: msg });
+              continue;
+            }
+
+            const isAnim = cmd === 'bratvid' || cmd === 'bratvideo';
+            const bratWebp = await createBratSticker(bratText, isAnim);
+            if (bratWebp) {
+              await sock.sendMessage(jid, { sticker: bratWebp }, { quoted: msg });
+            } else {
+              await sock.sendMessage(jid, { text: '❌ Gagal membuat stiker brat saat ini.' }, { quoted: msg });
+            }
+            continue;
+          }
+
+          if ((cmd === 'ttp' || cmd === 'attp') && param) {
+            const webpBuf = await urlOrTextToWebpSticker(param);
+            if (webpBuf) await sock.sendMessage(jid, { sticker: webpBuf }, { quoted: msg });
+            continue;
+          }
+
           if (cmd === 'animasi' || cmd === 'linkvideo') {
             const targetLink = extractUrl(param);
             const label = targetLink ? 'HD LINK ANIMATION' : param || bot.userName;
             await sock.sendMessage(jid, { text: '🎬 Mengonversi link menjadi Video Pendek Animasi HD...' }, { quoted: msg });
-            const hdResult = await convertLinkToHdShortVideo(targetLink, label, false);
+            const hdResult = await convertLinkToHdShortVideo(targetLink, label);
             if (hdResult?.type === 'video' && hdResult.buffer) {
               await sock.sendMessage(
                 jid,
@@ -1278,8 +1305,6 @@ function pasangPenjawab(sock) {
               );
             } else if (hdResult?.buffer) {
               await sock.sendMessage(jid, { image: hdResult.buffer, caption: `✨ *Kartu Visual HD*` }, { quoted: msg });
-            } else {
-              await sock.sendMessage(jid, { text: '❌ Gagal memproses link menjadi animasi HD.' }, { quoted: msg });
             }
             continue;
           }
@@ -1287,11 +1312,6 @@ function pasangPenjawab(sock) {
           if (cmd === 'font' || cmd === 'fancy') {
             if (!param) continue;
             await sock.sendMessage(jid, { text: FONT_MAPS.map((_, idx) => `${idx + 1}. ${applyFont(param, idx)}`).join('\n') }, { quoted: msg });
-            continue;
-          }
-
-          if (/^font([1-9]|10)$/.test(cmd) && param) {
-            await sock.sendMessage(jid, { text: applyFont(param, parseInt(cmd.replace('font', ''), 10) - 1) }, { quoted: msg });
             continue;
           }
 
@@ -1304,7 +1324,32 @@ function pasangPenjawab(sock) {
             continue;
           }
 
-          // === TOOLS ===
+          // === RVO (READ VIEW ONCE) & TOOLS ===
+          if (['rvo', 'rvop', 'vv'].includes(cmd)) {
+            const qRaw = unwrapped.extendedTextMessage?.contextInfo?.quotedMessage;
+            const mediaVo = await extractAndDownloadViewOnce(qRaw);
+            if (!mediaVo || !mediaVo.buffer || mediaVo.buffer.length < 100) {
+              await sock.sendMessage(jid, { text: '⚠️ Balas pesan **Foto / Video / VN Sekali Lihat (View Once)** dengan perintah `.rvo` (kirim di sini) atau `.rvop` (kirim ke chat pribadi).' }, { quoted: msg });
+              continue;
+            }
+
+            const targetChat = cmd === 'rvop' ? senderParticipant : jid;
+            const cap = `👁️ *RVO (View Once Terbuka)*${mediaVo.caption ? `\n📝 ${mediaVo.caption}` : ''}`;
+
+            if (mediaVo.type === 'image') {
+              await sock.sendMessage(targetChat, { image: mediaVo.buffer, caption: cap }, { quoted: cmd === 'rvop' ? undefined : msg });
+            } else if (mediaVo.type === 'video') {
+              await sock.sendMessage(targetChat, { video: mediaVo.buffer, caption: cap }, { quoted: cmd === 'rvop' ? undefined : msg });
+            } else if (mediaVo.type === 'audio') {
+              await sock.sendMessage(targetChat, { audio: mediaVo.buffer, mimetype: 'audio/mp4', ptt: true }, { quoted: cmd === 'rvop' ? undefined : msg });
+            }
+
+            if (cmd === 'rvop' && isGroup) {
+              await sock.sendMessage(jid, { text: '✅ Media View Once berhasil dikirim ke chat pribadimu!' }, { quoted: msg });
+            }
+            continue;
+          }
+
           if (cmd === 'hitung' && param && /^[0-9+\-*/().\s]+$/.test(param)) {
             await sock.sendMessage(jid, { text: `🧮 *${param}* = *${Function(`"use strict"; return (${param})`)()}*` }, { quoted: msg });
             continue;
@@ -1328,13 +1373,13 @@ function pasangPenjawab(sock) {
           }
           if (cmd === 'id') { await sock.sendMessage(jid, { text: `🆔 Chat: \`${jid}\`\nUser: \`${senderParticipant}\`` }, { quoted: msg }); continue; }
           if (cmd === 'getpp') {
-            const target = msg.message.extendedTextMessage?.contextInfo?.mentionedJid?.[0] || senderParticipant;
+            const target = unwrapped.extendedTextMessage?.contextInfo?.mentionedJid?.[0] || senderParticipant;
             const pp = await sock.profilePictureUrl(target, 'image').catch(() => null);
             await sock.sendMessage(jid, pp ? { image: { url: pp } } : { text: '❌ Foto profil disembunyikan.' }, { quoted: msg });
             continue;
           }
           if (cmd === 'getbio') {
-            const target = msg.message.extendedTextMessage?.contextInfo?.mentionedJid?.[0] || senderParticipant;
+            const target = unwrapped.extendedTextMessage?.contextInfo?.mentionedJid?.[0] || senderParticipant;
             const st = await sock.fetchStatus(target).catch(() => null);
             await sock.sendMessage(jid, { text: `📝 Bio: ${st?.status || '-'}` }, { quoted: msg });
             continue;
@@ -1356,26 +1401,6 @@ function pasangPenjawab(sock) {
           }
           if (cmd === 'waktu') {
             await sock.sendMessage(jid, { text: `🕒 ${new Date().toLocaleString('id-ID', { timeZone: 'Asia/Jakarta' })} WIB` }, { quoted: msg });
-            continue;
-          }
-          if ((cmd === 'attp' || cmd === 'sticker') && param) {
-            await sock.sendMessage(jid, { image: { url: `https://dummyimage.com/512x512/14171c/38bdf8.png&text=${encodeURIComponent(param)}` } }, { quoted: msg });
-            continue;
-          }
-          if (cmd === 'vv' || cmd === 'rvo') {
-            const qMsg = msg.message.extendedTextMessage?.contextInfo?.quotedMessage;
-            const vo = qMsg?.viewOnceMessageV2?.message || qMsg?.viewOnceMessage?.message || qMsg?.viewOnceMessageV2Extension?.message;
-            if (vo?.imageMessage) {
-              const stream = await downloadContentFromMessage(vo.imageMessage, 'image');
-              let buf = Buffer.from([]);
-              for await (const chunk of stream) buf = Buffer.concat([buf, chunk]);
-              await sock.sendMessage(jid, { image: buf }, { quoted: msg });
-            } else if (vo?.videoMessage) {
-              const stream = await downloadContentFromMessage(vo.videoMessage, 'video');
-              let buf = Buffer.from([]);
-              for await (const chunk of stream) buf = Buffer.concat([buf, chunk]);
-              await sock.sendMessage(jid, { video: buf }, { quoted: msg });
-            }
             continue;
           }
 
@@ -1412,7 +1437,7 @@ function pasangPenjawab(sock) {
         // 🤖 5. OBROLAN AI CERDAS
         // ----------------------------------------------------
         if (isGroup) {
-          const contextInfo = msg.message.extendedTextMessage?.contextInfo;
+          const contextInfo = unwrapped.extendedTextMessage?.contextInfo;
           const botIdPrefix = (bot.userPhone || sock.user?.id?.split(':')[0] || '').replace(/\D/g, '');
           const isMentioned = botIdPrefix && (contextInfo?.mentionedJid || []).some((m) => m.includes(botIdPrefix));
           const isQuotedBot = botIdPrefix && contextInfo?.participant?.includes(botIdPrefix);
@@ -1482,7 +1507,7 @@ async function start() {
     version,
     auth: state,
     logger: pino({ level: 'silent' }),
-    browser: ['WHUXEN Bot', 'Chrome', '6.5.0'],
+    browser: ['WHUXEN Bot', 'Chrome', '7.0.0'],
     printQRInTerminal: false,
   });
 
