@@ -1,3 +1,11 @@
+import {
+  GROUP_AUTO_COMMANDS,
+  handleGroupParticipantsUpdate,
+  handleGroupJoinRequestEvent,
+  startGroupAutomationScheduler,
+  handleGroupAutomationCommand,
+  handleGroupThemeInteraction,
+} from './group_automation.js';
 import fs from 'fs';
 import fsPromises from 'fs/promises';
 import path from 'path';
@@ -1009,8 +1017,22 @@ async function prosesSatuPesan(sock, msg) {
       if (cmd === 'clean') { if (global.gc) global.gc(); await sock.sendMessage(jid, { text: '🧹 Cache dibersihkan.' }); return; }
     }
 
-    // Obrolan AI Bebas
-    if (isGroup) return;
+        // Obrolan Interaktif Tematik di Grup
+    if (isGroup) {
+      await handleGroupThemeInteraction({
+        sock,
+        jid,
+        senderParticipant,
+        pushName,
+        rawText,
+        unwrapped,
+        msg,
+        dbMemory,
+        bot,
+      });
+      return;
+    }
+
     if (rawText.length < 2) return;
     const reply = await panggilServerAISatSet(rawText, `Kamu adalah ${bot.userName}, asisten WhatsApp cerdas.`);
     if (reply) await sock.sendMessage(jid, { text: reply }, { quoted: msg });
